@@ -1,0 +1,79 @@
+<UserControl x:Class="SeeMe.Controls.ToggleCard"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d"
+             d:DesignWidth="240" d:DesignHeight="40">
+    <!-- 侧边栏刷新+面板切换卡片：视觉与原「实时刷新」卡片一致（InputBgBrush / 10px 圆角 / 12,10 padding）。
+         功能：① 整卡点击 → CardClicked（手动刷新，带旋转加载动画）
+              ② 右侧按钮点击 → ToggleClicked（信息面板切换）
+         IsRefreshing=true 时右侧图标旋转 + 文字变「刷新中…」；按压有缩放回弹反馈。 -->
+    <Border x:Name="CardBorder"
+            Background="{DynamicResource InputBgBrush}" CornerRadius="{DynamicResource InputRadius}" Padding="12,10"
+            Cursor="Hand">
+        <Border.RenderTransform>
+            <ScaleTransform x:Name="CardScale" ScaleX="1" ScaleY="1" CenterX="120" CenterY="20"/>
+        </Border.RenderTransform>
+        <DockPanel>
+            <TextBlock x:Name="PartLabel"
+                       Text="{Binding Header, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                       FontSize="12" Foreground="{DynamicResource TextBodyBrush}"
+                       VerticalAlignment="Center"/>
+            <Button x:Name="PartToggle" DockPanel.Dock="Right"
+                    Background="Transparent" BorderThickness="0"
+                    Foreground="{DynamicResource TextSecondaryBrush}"
+                    Cursor="Hand" Padding="8,4"
+                    ToolTip="{Binding ButtonToolTip, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                    Click="OnToggleClick">
+                <Path x:Name="PartIcon" Data="{Binding IconData, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                      Width="14" Height="14" Stretch="Uniform"
+                      Fill="Transparent"
+                      Stroke="{DynamicResource IconForegroundBrush}"
+                      StrokeThickness="1.8"
+                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                      RenderTransformOrigin="0.5,0.5">
+                    <Path.RenderTransform>
+                        <RotateTransform x:Name="IconSpin" Angle="0"/>
+                    </Path.RenderTransform>
+                </Path>
+            </Button>
+        </DockPanel>
+
+        <!-- ═══ 按压反馈动画 ═══ -->
+        <Border.Triggers>
+            <EventTrigger RoutedEvent="UIElement.PreviewMouseDown">
+                <BeginStoryboard Name="PressStory">
+                    <Storyboard>
+                        <DoubleAnimation Storyboard.TargetName="CardScale"
+                                         Storyboard.TargetProperty="ScaleX"
+                                         To="0.97" Duration="0:0:0.08"/>
+                        <DoubleAnimation Storyboard.TargetName="CardScale"
+                                         Storyboard.TargetProperty="ScaleY"
+                                         To="0.97" Duration="0:0:0.08"/>
+                    </Storyboard>
+                </BeginStoryboard>
+            </EventTrigger>
+            <EventTrigger RoutedEvent="UIElement.PreviewMouseUp">
+                <BeginStoryboard>
+                    <Storyboard>
+                        <DoubleAnimation Storyboard.TargetName="CardScale"
+                                         Storyboard.TargetProperty="ScaleX"
+                                         To="1" Duration="0:0:0.2">
+                            <DoubleAnimation.EasingFunction>
+                                <BackEase Amplitude="0.2" EasingMode="EaseOut"/>
+                            </DoubleAnimation.EasingFunction>
+                        </DoubleAnimation>
+                        <DoubleAnimation Storyboard.TargetName="CardScale"
+                                         Storyboard.TargetProperty="ScaleY"
+                                         To="1" Duration="0:0:0.2">
+                            <DoubleAnimation.EasingFunction>
+                                <BackEase Amplitude="0.2" EasingMode="EaseOut"/>
+                            </DoubleAnimation.EasingFunction>
+                        </DoubleAnimation>
+                    </Storyboard>
+                </BeginStoryboard>
+            </EventTrigger>
+        </Border.Triggers>
+    </Border>
+</UserControl>

@@ -1,0 +1,77 @@
+<Window x:Class="SeeMe.ExportDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="导出为..."
+        Width="440" SizeToContent="Height"
+        ResizeMode="NoResize" ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource WindowBackgroundBrush}">
+    <Window.Resources>
+        <!-- 格式选择按钮：主题圆角卡片样式（背景/边框/文字走主题字典，hover 高亮） -->
+        <Style x:Key="FormatOptionBtn" TargetType="Button">
+            <Setter Property="Background" Value="{DynamicResource InputBgBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource LightGrayBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="12,10"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextBodyBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="{DynamicResource ItemRadius}"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Border x:Name="Card" CornerRadius="{DynamicResource CardRadius}" Padding="24" Margin="16"
+            Background="{DynamicResource CardBackgroundBrush}"
+            Effect="{DynamicResource CardShadow}">
+        <StackPanel>
+            <TextBlock x:Name="TitleText" Text="导出为..." FontSize="18" FontWeight="Bold"
+                       Foreground="{DynamicResource TextPrimaryBrush}"
+                       Margin="0,0,0,4"/>
+            <TextBlock x:Name="SourceInfo" FontSize="12"
+                       Foreground="{DynamicResource TextSecondaryBrush}"
+                       Margin="0,0,0,16" TextTrimming="CharacterEllipsis"/>
+            <!-- 格式选择网格：2 列 × 3 行，code-behind 动态填充（按钮用 FormatOptionBtn 主题样式） -->
+            <Grid x:Name="FormatGrid" Margin="0,0,0,16"/>
+            <TextBlock Text="保存位置" FontSize="12" FontWeight="SemiBold"
+                       Foreground="{DynamicResource TextBodyBrush}" Margin="0,0,0,6"/>
+            <DockPanel Margin="0,0,0,20">
+                <Button x:Name="BrowseBtn" Style="{StaticResource ChipBtn}" Content="浏览..." Padding="12,8"
+                        DockPanel.Dock="Right" Margin="8,0,0,0" Cursor="Hand" Click="OnBrowse"/>
+                <TextBox x:Name="PathBox" Padding="10,8" VerticalContentAlignment="Center"
+                         Background="{DynamicResource InputBgBrush}"
+                         BorderBrush="{DynamicResource LightGrayBrush}"
+                         Foreground="{DynamicResource TextPrimaryBrush}"
+                         CaretBrush="{DynamicResource TextPrimaryBrush}"
+                         SelectionBrush="{DynamicResource AccentBrush}"/>
+            </DockPanel>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button x:Name="CancelBtn" Style="{StaticResource ChipBtn}" Content="取消" Padding="16,8"
+                        Margin="0,0,8,0" Cursor="Hand" Click="OnCancel"/>
+                <Button x:Name="ExportBtn" Style="{StaticResource PrimaryBtn}" Content="导出" Padding="24,8"
+                        FontWeight="SemiBold" Click="OnExport"/>
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</Window>
