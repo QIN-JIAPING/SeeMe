@@ -1,3 +1,6 @@
+// Copyright (c) 2026 QIN-JIAPING
+// SPDX-License-Identifier: MIT
+
 using System;
 using Microsoft.Win32;
 using System.Windows.Controls;

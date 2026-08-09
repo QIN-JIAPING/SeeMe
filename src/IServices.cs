@@ -1,3 +1,6 @@
+// Copyright (c) 2026 QIN-JIAPING
+// SPDX-License-Identifier: MIT
+
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;

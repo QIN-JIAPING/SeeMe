@@ -1,4 +1,7 @@
-﻿using System;
+﻿// Copyright (c) 2026 QIN-JIAPING
+// SPDX-License-Identifier: MIT
+
+using System;
 using System.IO;
 using System.Linq;
 using System.Text;
