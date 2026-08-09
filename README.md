@@ -41,15 +41,20 @@
 
 ```
 SeeMe/
-├── App.xaml / App.xaml.cs        # 应用入口，多窗口管理，启动参数打开文件
-├── MainWindow.xaml(.cs)          # 主窗口：双栏、搜索、缩放、自动刷新、拖拽
-├── RenderService.cs              # Markdown → 主题化 HTML、Office/PDF 页面模板
-├── FileConverter.cs             # docx / xlsx / pptx / pdf → HTML
-├── ThemeManager.cs              # 亮/暗主题 ResourceDictionary 构建与持久化
-├── FileHistory.cs               # 最近文件历史（持久化）
-├── PanelState.cs                 # 单面板状态（文件、监视器、防抖、滚动、缩放）
-├── app_icon.ico / app_icon.png   # 应用图标
-└── SeeMe.csproj                 # .NET 8 WPF 工程（支持单文件自包含发布）
+├── src/                           # 全部源码
+│   ├── App.xaml / App.xaml.cs     # 应用入口，多窗口管理，启动参数打开文件
+│   ├── MainWindow.xaml(.cs)       # 主窗口：双栏、搜索、缩放、自动刷新、拖拽
+│   ├── RenderService.cs           # Markdown → 主题化 HTML、Office/PDF 页面模板
+│   ├── FileConverter.cs           # docx / xlsx / pptx / pdf → HTML
+│   ├── ThemeManager.cs            # 亮/暗主题 ResourceDictionary 构建与持久化
+│   ├── FileHistory.cs             # 最近文件历史（持久化）
+│   ├── PanelState.cs              # 单面板状态（文件、监视器、防抖、滚动、缩放）
+│   ├── Controls/                  # 自定义控件
+│   └── app.manifest / app_icon.*  # 清单与图标
+├── SeeMe.csproj                   # .NET 8 WPF 工程（支持单文件自包含发布）
+├── README.md
+├── LICENSE
+└── .gitignore
 ```
 
 ---

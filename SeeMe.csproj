@@ -6,13 +6,13 @@
     <Nullable>enable</Nullable>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
-    <ApplicationIcon>app_icon.ico</ApplicationIcon>
+    <ApplicationIcon>src\app_icon.ico</ApplicationIcon>
     <AssemblyName>SeeMe</AssemblyName>
     <RootNamespace>SeeMe</RootNamespace>
     <Version>1.0.1</Version>
     <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
     <LangVersion>latest</LangVersion>
-    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationManifest>src\app.manifest</ApplicationManifest>
     <EnableDefaultPageItems>false</EnableDefaultPageItems>
     <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
@@ -30,31 +30,31 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ApplicationDefinition Include="App.xaml">
+    <ApplicationDefinition Include="src\App.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </ApplicationDefinition>
-    <Page Include="MainWindow.xaml">
+    <Page Include="src\MainWindow.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
-    <Page Include="Controls\ToggleCard.xaml">
+    <Page Include="src\Controls\ToggleCard.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
-    <Page Include="ExportDialog.xaml">
+    <Page Include="src\ExportDialog.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
-    <Page Include="SettingsDialog.xaml">
+    <Page Include="src\SettingsDialog.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
   </ItemGroup>
 
   <ItemGroup>
-    <Resource Include="app_icon.png" />
-    <Resource Include="app_icon.ico" />
+    <Resource Include="src\app_icon.png" />
+    <Resource Include="src\app_icon.ico" />
   </ItemGroup>
 
   <ItemGroup>
