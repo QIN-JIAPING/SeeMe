@@ -37,3 +37,9 @@ pandoc_settings.json
 CODE_REVIEW.md
 docs/
 codegraph.json
+
+# ===== 本地保留，不入库（仓库为纯源码形态） =====
+.codegraph/
+tools/
+SeeMe.Tests/
+Resources/

@@ -17,13 +17,10 @@
 | **明 / 暗主题** | 完整主题色板（亮 / 暗），偏好持久化到 `settings.json` |
 | **缩放 & 滚动记忆** | 字体缩放（`FontScale`）、滚动位置记忆（`LastScrollY`）随文件恢复 |
 | **文件历史** | 最近 15 个打开记录，一键重开（持久化 `history.json`） |
-| **代码高亮** | Prism.js 多语言高亮，自定义滚动条样式 |
 | **YAML Front Matter** | Markdown 头部的 YAML 元信息渲染为信息卡片 |
 | **窗口状态记忆** | 尺寸 / 位置 / 最大化状态持久化（`window.json`） |
 | **拖拽 & 命令行** | 支持拖入文件打开；支持启动时传入文件路径参数 |
 | **多窗口** | 可同时打开多个独立窗口，全部关闭后退出 |
-| **数学公式** | KaTeX 渲染行内 / 块级 LaTeX 数学公式 |
-| **图表** | Mermaid 流程图 / 时序图 / 甘特图等 |
 | **pandoc 导出** | 一键导出 docx / pdf / latex / html / epub / markdown；白色圆角对话框 + 自定义保存路径 |
 
 ---
@@ -46,13 +43,12 @@
 SeeMe/
 ├── App.xaml / App.xaml.cs        # 应用入口，多窗口管理，启动参数打开文件
 ├── MainWindow.xaml(.cs)          # 主窗口：双栏、搜索、缩放、自动刷新、拖拽
-├── RenderService.cs              # Markdown → 主题化 HTML、Office/PDF 页面模板、Prism 注入
+├── RenderService.cs              # Markdown → 主题化 HTML、Office/PDF 页面模板
 ├── FileConverter.cs             # docx / xlsx / pptx / pdf → HTML
 ├── ThemeManager.cs              # 亮/暗主题 ResourceDictionary 构建与持久化
 ├── FileHistory.cs               # 最近文件历史（持久化）
 ├── PanelState.cs                 # 单面板状态（文件、监视器、防抖、滚动、缩放）
-├── Resources/prism/             # Prism.js 语法高亮资源（js/css）
-├── app_icon.ico / app_icon.png   # 应用图标（白色 W 黑底，由 tools/create_icon.py 生成）
+├── app_icon.ico / app_icon.png   # 应用图标
 └── SeeMe.csproj                 # .NET 8 WPF 工程（支持单文件自包含发布）
 ```
 
