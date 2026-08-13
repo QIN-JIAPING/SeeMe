@@ -26,19 +26,6 @@
 | **pandoc 导出** | 一键导出 docx / pdf / latex / html / epub / markdown；白色圆角对话框 + 自定义保存路径 |
 | **安全加固** | 多级纵深防御：Markdig 禁用原始 HTML、全链路输出转义、CSP nonce 脚本白名单、文档虚拟主机单文件白名单、file: 导航拦截、外链 scheme 白名单、远程图片按文档授权加载（默认拦截 + no-referrer） |
 
----
-
-## 🧩 支持的文档类型
-
-| 格式 | 转换方式 |
-|------|----------|
-| `.md` | Markdig → HTML（主题化 CSS） |
-| `.docx/.doc/.docm/.pptx/.ppt/.rtf/.odt/.ods/.odp/.epub/.csv/.xlsm` | anydoc-wasm（页内 WebAssembly）→ GitHub-Flavored Markdown → Markdig 渲染；失败/5s 超时回退 OpenXML 解析（docm/xlsm 为宏文档变体，映射到 docx/xlsx 解析器） |
-| `.xlsx` | anydoc-wasm → Markdown；回退 `DocumentFormat.OpenXml` 解析工作表 |
-| `.xls` | `DocumentFormat.OpenXml` 解析工作表（旧二进制 OLE，anydoc 不支持） |
-| `.pdf` | PDF.js 整页渲染（文本可选、缩放、双栏同步） |
-
----
 
 ## 📁 项目结构
 
