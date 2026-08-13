@@ -48,7 +48,13 @@ namespace SeeMe
         {
             if (state?.WebView?.CoreWebView2 == null) return;
             var msg = System.Security.SecurityElement.Escape(ex.Message);
+            // 堆栈含文件路径与内部结构，仅 Debug 构建显示；Release 只给友好提示，避免截图/分享时泄露
+#if DEBUG
             var stack = System.Security.SecurityElement.Escape(ex.StackTrace ?? "(无堆栈信息)");
+            var stackHtml = "<div class='stack'>" + stack + "</div>";
+#else
+            var stackHtml = "";
+#endif
             var css = @"
   * { margin:0; padding:0; box-sizing:border-box; }
   html,body { width:100%; height:100vh; }
@@ -63,7 +69,7 @@ namespace SeeMe
   <h2>⚠ 预览失败</h2>
   <div class='box'>
     <div class='msg'>" + msg + @"</div>
-    <div class='stack'>" + stack + @"</div>
+    " + stackHtml + @"
   </div>
   <div class='hint'>可尝试重新打开文件，或按 F5 手动刷新。详细日志见错误日志文件。</div>");
             try { state.WebView.NavigateToString(html); } catch (Exception ex2) { LogErr("RenderErrorPage: " + ex2.Message); }

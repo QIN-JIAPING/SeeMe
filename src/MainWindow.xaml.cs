@@ -112,6 +112,9 @@ namespace SeeMe
                 SaveWindowState();
                 CleanupPanel(_app.Left);
                 CleanupPanel(_app.Right);
+                // 释放隐藏提取 WebView：ExtractView 独立于 PanelState，此前从未 Dispose，
+                // 多窗口反复开关会导致 WebView2 渲染进程与事件订阅持续泄漏。
+                try { ExtractView?.Dispose(); } catch (Exception ex) { LogErr("ExtractView dispose: " + ex.Message); }
             }
             catch (Exception ex) { LogErr("OnClosed cleanup: " + ex.Message); }
             base.OnClosed(e);
@@ -966,9 +969,12 @@ window.addEventListener('drop',function(e){
                 var kind = kindEl.GetString();
                 if (kind == "pdf-read-log")
                 {
-                    // PDF 图文重建诊断日志（浏览器端上报 → error.log，排查图片/文本重建问题）
+                    // PDF 图文重建诊断日志：仅 Debug 构建记录（内容级日志含文本片段，
+                    // Release 不落盘，避免敏感 PDF 内容经日志泄露）。
+#if DEBUG
                     var msg = root.TryGetProperty("msg", out var mEl) ? mEl.GetString() : "";
                     if (!string.IsNullOrEmpty(msg)) LogInfo("[PDF-READ] " + msg);
+#endif
                     return;
                 }
                 if (kind == "pdf-outline")
@@ -1133,7 +1139,7 @@ window.addEventListener('drop',function(e){
                     ShowOpenFor(state);
                 }
             }
-            catch (Exception ex) { LogErr("Web msg parse: " + ex.Message + " | raw=" + (raw ?? "<null>")); }
+            catch (Exception ex) { LogErr("Web msg parse: " + ex.Message + " | rawLen=" + (raw?.Length ?? -1)); }
         }
 
         /// <summary>

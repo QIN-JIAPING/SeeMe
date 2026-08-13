@@ -26,6 +26,24 @@
 | **pandoc 导出** | 一键导出 docx / pdf / latex / html / epub / markdown；白色圆角对话框 + 自定义保存路径 |
 | **安全加固** | 多级纵深防御：Markdig 禁用原始 HTML、全链路输出转义、CSP nonce 脚本白名单、文档虚拟主机单文件白名单、file: 导航拦截、外链 scheme 白名单、远程图片按文档授权加载（默认拦截 + no-referrer） |
 
+---
+
+## 🧩 支持的文档类型
+
+| 类别 | 扩展名 | 渲染方式 | 回退 |
+|------|--------|----------|------|
+| 📝 Markdown | `.md` `.markdown` `.mkd` `.mdown` | Markdig 直渲（主题化 CSS） | — |
+| 📄 Word | `.docx` `.doc` `.docm` `.rtf` `.odt` | anydoc-wasm → Markdown → Markdig | OpenXML 解析 |
+| 📊 Excel | `.xlsx` `.xls` `.xlsm` `.ods` `.csv` | anydoc-wasm → Markdown → Markdig | OpenXML 解析（`.xls` 仅 OpenXML） |
+| 📽 PowerPoint | `.pptx` `.ppt` `.odp` | anydoc-wasm → Markdown → Markdig | OpenXML 解析 |
+| 📚 电子书 | `.epub` | anydoc-wasm → Markdown → Markdig | 错误页 |
+| 📕 PDF | `.pdf` | PDF.js 整页渲染（文本层提取、缩放、双栏同步） | — |
+
+> **说明**：
+> - **anydoc-wasm**：页内 WebAssembly 转换器，覆盖 Office 12 种格式；失败或 5s 超时自动回退右侧列。
+> - **宏文档变体**：`.docm` / `.xlsm` 含宏，仅解析内容不执行宏，映射到 docx/xlsx 解析器。
+
+---
 
 ## 📁 项目结构
 

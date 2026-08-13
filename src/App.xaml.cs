@@ -26,6 +26,9 @@ namespace SeeMe
 
             InitTray();
 
+            // 清理过期的 PDF 文本层缓存（防磁盘无限增长 + 残留敏感 PDF 明文）
+            try { PdfTextCache.CleanupExpired(); } catch { }
+
             var file = e.Args.Length > 0 && File.Exists(e.Args[0]) ? e.Args[0] : null;
             CreateWindow(file);
         }
@@ -67,6 +70,11 @@ namespace SeeMe
             if (_trayIcon != null)
             {
                 _trayIcon.Visible = false;
+                // ExtractAssociatedIcon 返回的是新的 GDI+ Icon 对象，须显式释放，
+                // 否则每个窗口生命周期泄漏一个图标句柄。
+                var icon = _trayIcon.Icon;
+                _trayIcon.Icon = null;
+                try { icon?.Dispose(); } catch { }
                 _trayIcon.Dispose();
                 _trayIcon = null;
             }
