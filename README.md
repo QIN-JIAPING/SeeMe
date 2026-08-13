@@ -11,7 +11,9 @@
 | 类别 | 说明 |
 |------|------|
 | **Markdown 渲染** | Markdig 高级管线：管道表格 / 网格表格 / 任务列表 / 自动链接 / 自动锚点 / Emoji；禁用原始 HTML 以保证安全 |
-| **多格式文档** | 直接预览 `.md`、Word(`.docx`)、Excel(`.xlsx`)、PowerPoint(`.pptx`)、PDF(`.pdf`)，统一 HTML 呈现 |
+| **多格式文档** | 直接预览 `.md`、Word(`.docx/.doc/.docm/.rtf/.odt`)、Excel(`.xlsx/.xls/.xlsm/.ods/.csv`)、PowerPoint(`.pptx/.ppt/.odp`)、电子书(`.epub`)、PDF(`.pdf`)，统一 HTML 呈现 |
+| **PDF 文本层** | 打开时用 anydoc 内嵌 pdf-inspector 毫秒级提取文本：`>关键词` 内容搜索命中 PDF、扫描版无文本层自动标记 |
+| **编辑自动保存** | 编辑模式输入停顿 5/10/30 秒自动落盘（可开关），顶栏 ● 未保存指示，退出/切文件不丢字；开关与间隔改动对已打开编辑页即时生效 |
 | **双栏分屏** | 左右双面板对照阅读，可独立打开不同文件 |
 | **自动刷新** | `FileSystemWatcher` + 350ms 防抖，源文件改动即时刷新 |
 | **明 / 暗主题** | 完整主题色板（亮 / 暗），偏好持久化到 `settings.json` |
@@ -22,6 +24,7 @@
 | **拖拽 & 命令行** | 支持拖入文件打开；支持启动时传入文件路径参数 |
 | **多窗口** | 可同时打开多个独立窗口，全部关闭后退出 |
 | **pandoc 导出** | 一键导出 docx / pdf / latex / html / epub / markdown；白色圆角对话框 + 自定义保存路径 |
+| **安全加固** | 多级纵深防御：Markdig 禁用原始 HTML、全链路输出转义、CSP nonce 脚本白名单、文档虚拟主机单文件白名单、file: 导航拦截、外链 scheme 白名单、远程图片按文档授权加载（默认拦截 + no-referrer） |
 
 ---
 
@@ -30,10 +33,10 @@
 | 格式 | 转换方式 |
 |------|----------|
 | `.md` | Markdig → HTML（主题化 CSS） |
-| `.docx` | `DocumentFormat.OpenXml` 解析段落 / 标题样式 / 表格 / 加粗斜体下划线 |
-| `.xlsx` | `DocumentFormat.OpenXml` 解析工作表（共享字符串 / 内联字符串 / 数字格式化，单表上限 5000 行、50 个工作表） |
-| `.pptx` | `DocumentFormat.OpenXml` 解析幻灯片文本（上限 200 页） |
-| `.pdf` | `UglyToad.PdfPig` 按字母坐标重建文本行，区分正文 / 代码块 |
+| `.docx/.doc/.docm/.pptx/.ppt/.rtf/.odt/.ods/.odp/.epub/.csv/.xlsm` | anydoc-wasm（页内 WebAssembly）→ GitHub-Flavored Markdown → Markdig 渲染；失败/5s 超时回退 OpenXML 解析（docm/xlsm 为宏文档变体，映射到 docx/xlsx 解析器） |
+| `.xlsx` | anydoc-wasm → Markdown；回退 `DocumentFormat.OpenXml` 解析工作表 |
+| `.xls` | `DocumentFormat.OpenXml` 解析工作表（旧二进制 OLE，anydoc 不支持） |
+| `.pdf` | PDF.js 整页渲染（文本可选、缩放、双栏同步） |
 
 ---
 
@@ -44,13 +47,15 @@ SeeMe/
 ├── src/                           # 全部源码
 │   ├── App.xaml / App.xaml.cs     # 应用入口，多窗口管理，启动参数打开文件
 │   ├── MainWindow.xaml(.cs)       # 主窗口：双栏、搜索、缩放、自动刷新、拖拽
-│   ├── RenderService.cs           # Markdown → 主题化 HTML、Office/PDF 页面模板
+│   ├── RenderService.cs           # Markdown → 主题化 HTML、Office/PDF 页面模板、CSP/消毒
 │   ├── FileConverter.cs           # docx / xlsx / pptx / pdf → HTML
 │   ├── ThemeManager.cs            # 亮/暗主题 ResourceDictionary 构建与持久化
 │   ├── FileHistory.cs             # 最近文件历史（持久化）
 │   ├── PanelState.cs              # 单面板状态（文件、监视器、防抖、滚动、缩放）
+│   ├── PdfTextCache.cs            # PDF 文本层提取结果缓存
 │   ├── Controls/                  # 自定义控件
 │   └── app.manifest / app_icon.*  # 清单与图标
+├── tools/                         # 构建/发布/依赖扫描脚本（本地开发用）
 ├── SeeMe.csproj                   # .NET 8 WPF 工程（支持单文件自包含发布）
 ├── README.md
 ├── LICENSE

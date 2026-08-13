@@ -9,7 +9,7 @@
     <ApplicationIcon>src\app_icon.ico</ApplicationIcon>
     <AssemblyName>SeeMe</AssemblyName>
     <RootNamespace>SeeMe</RootNamespace>
-    <Version>1.0.1</Version>
+    <Version>1.0.2</Version>
     <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
     <LangVersion>latest</LangVersion>
     <ApplicationManifest>src\app.manifest</ApplicationManifest>
@@ -75,6 +75,9 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <Content Include="Resources\pdfjs\*.*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Resources\anydoc\*.*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

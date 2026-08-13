@@ -17,6 +17,18 @@ namespace SeeMe
         /// <summary>WebView2 铏氭嫙涓绘満鍚嶏紝鏄犲皠鍒版湰鍦? Resources 鐩綍锛岀敤浜庡畨鍏ㄥ姞杞界绾? JS/CSS/瀛椾綋锛岄伩鍏? file: 鍗忚銆?</summary>
         public const string VirtualHost = "appassets.example";
 
+        /// <summary>
+        /// Generate a per-render CSP nonce: script-src uses 'nonce-xxx' instead of 'unsafe-inline',
+        /// inline scripts must carry the matching nonce attribute to execute — injected
+        /// malicious &lt;script&gt; (no nonce) is blocked by CSP.
+        /// </summary>
+        public static string NewNonce()
+        {
+            Span<byte> buf = stackalloc byte[16];
+            System.Security.Cryptography.RandomNumberGenerator.Fill(buf);
+            return Convert.ToBase64String(buf);
+        }
+
         public MarkdownPipeline Pipeline { get; } = new MarkdownPipelineBuilder()
             .UseAdvancedExtensions()
             .UsePipeTables()
@@ -73,7 +85,7 @@ namespace SeeMe
                 // 鍓ョ on*/style 鍗遍櫓灞炴?э紝浠呬繚鐣欏畨鍏ㄥ睘鎬у洖鍐?
                 var rest = DangerousAttrRegex.Replace(m.Groups[1].Value, "");
                 var attr = ImgSrcAttrRegex.Match(rest);
-                if (!attr.Success) return m.Value;
+                if (!attr.Success) return $"<img{rest}>";
 
                 var src = attr.Groups["src"].Value;
 
@@ -83,7 +95,7 @@ namespace SeeMe
                     || src.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
                     || src.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
                     || src.StartsWith("/", StringComparison.Ordinal))
-                    return m.Value;
+                    return $"<img{rest}>";
 
                 try
                 {
@@ -91,17 +103,17 @@ namespace SeeMe
                     // 璺緞閬嶅巻闃叉姢锛氳В鏋愮粨鏋滃繀椤讳粛浣嶄簬 baseDir 涔嬪唴锛屽惁鍒欒涓鸿秺鐣屾嫆缁濊鍙?
                     var baseFull = Path.GetFullPath(baseDir).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
                     if (!full.StartsWith(baseFull, StringComparison.OrdinalIgnoreCase))
-                        return m.Value;
-                    if (!File.Exists(full)) return m.Value;
+                        return $"<img{rest}>";
+                    if (!File.Exists(full)) return $"<img{rest}>";
                     // 璇诲彇澶у皬涓婇檺锛岄伩鍏嶈秴澶ф枃浠跺唴鑱斿鑷? OOM锛圖oS锛?
                     var fi = new FileInfo(full);
-                    if (fi.Length > MaxInlineImageBytes) return m.Value;
+                    if (fi.Length > MaxInlineImageBytes) return $"<img{rest}>";
                     // 鐩稿鍥剧墖鍐呰仈涓? data: URI锛屾棦閬垮厤 file: 鍗忚锛圕SP 宸茬鐢級锛屽張淇濊瘉绂荤嚎鍙敤
                     var mime = MimeFromExt(Path.GetExtension(full));
                     var b64 = Convert.ToBase64String(File.ReadAllBytes(full));
                     return $"<img{attr.Groups["before"].Value}src={attr.Groups["q"].Value}data:{mime};base64,{b64}{attr.Groups["q"].Value}{attr.Groups["after"].Value}";
                 }
-                catch { return m.Value; }
+                catch { return $"<img{rest}>"; }
             });
         }
 
@@ -286,6 +298,55 @@ namespace SeeMe
         /// <summary>鐢熸垚 :root锛堜寒锛?+ html.dark锛堟殫锛夊弻濂? CSS 鍙橀噺鍧楋紙鍞竴鏉ユ簮 ThemeColors锛夈??</summary>
         public static string ThemeCss() => ThemeColors.ThemeCss();
 
+        /// <summary>Markdown/Office/PDF 文档排版 CSS（标题/段落/引用/代码/表格/图片）。
+        /// 字号用相对单位随 body 缩放；Office 与 PDF 文本视图共用，保证观感一致。</summary>
+        public const string MdDocumentCss = @"
+.content h1,.content h2,.content h3,.content h4,.content h5,.content h6 { color:var(--heading); font-weight:600; margin:1em 0 .4em; line-height:1.3; }
+.content h1 {
+  font-size:1.5em; margin:.8em 0 .5em; padding-bottom:.3em; border-bottom:1px solid var(--h1-border);
+}
+.content h2 {
+  font-size:1.25em; padding-bottom:.2em; border-bottom:1px solid var(--border);
+}
+.content h3 { font-size:1.1em; }
+.content h4 { font-size:1em; }
+.content h5 { font-size:.92em; }
+.content h6 { font-size:.85em; color:var(--secondary); }
+.content p { margin:.6em 0; }
+.content blockquote {
+  border-left:3px solid var(--quote); background:var(--quote-bg);
+  padding:.5em 1em; margin:.8em 0; border-radius:0 4px 4px 0;
+  color:var(--quote-text);
+}
+.content code {
+  font-family:'Consolas','JetBrains Mono',monospace;
+  background:var(--code-bg); padding:2px 6px; border-radius:3px;
+  font-size:.9em;
+}
+.content pre {
+  background:var(--code-bg); padding:12px 16px; border-radius:8px;
+  overflow-x:auto; margin:.8em 0; font-size:12px; line-height:1.5;
+}
+.content table {
+  border-collapse:collapse; width:100%; margin:1em 0; font-size:.93em;
+}
+.content th, .content td {
+  border:1px solid var(--border); padding:6px 12px; text-align:left;
+}
+.content th {
+  background:var(--card); font-weight:600; color:var(--heading);
+}
+.content tr:hover td {
+  background:var(--row-hov);
+}
+html.dark .content tr:hover td {
+  background:rgba(255,255,255,.06);
+}
+.content img {
+  max-width:100%; border-radius:4px; margin:.5em 0;
+}
+";
+
         /// <summary>鍩虹 setTheme锛氫粎鍒? dark class銆傚瓙椤甸潰濡傞渶鑱斿姩锛圥rism/Mermaid锛夊彲鑷鎵╁睍鍚屽悕鍑芥暟銆?</summary>
         public static string SetThemeScript =>
             "function setTheme(dark){var h=document.documentElement;if(dark)h.classList.add('dark');else h.classList.remove('dark');}";
@@ -357,15 +418,18 @@ window.__seemeSearchPrev=function(){
         public static string WrapPage(bool isDark, string title, string css, string bodyHtml, string extraJs = "")
         {
             var cls = isDark ? " class='dark'" : "";
+            var nonce = NewNonce();
             return $@"<!DOCTYPE html>
 <html{cls}><head><meta charset='utf-8'/>
 <meta name='viewport' content='width=device-width,initial-scale=1'/>
+<meta name='referrer' content='no-referrer'/>
+<meta http-equiv='Content-Security-Policy' content=""default-src 'self' https://appassets.example; script-src 'nonce-{nonce}' https://appassets.example; style-src 'unsafe-inline'; img-src 'self' data: https://appassets.example;"">
 <title>{System.Security.SecurityElement.Escape(title)}</title>
 <style>{ThemeCss()}{css}</style>
 </head>
 <body>
 {bodyHtml}
-<script>{SetThemeScript}{extraJs}</script>
+<script nonce='{nonce}'>{SetThemeScript}{extraJs}</script>
 </body></html>";
         }
 
@@ -532,10 +596,16 @@ function setTheme(dark){{
 
             var htmlClass = isDark ? " class='dark'" : "";
 
+            // 远程图片策略：默认 img-src 不放行外网（防 IP/UA/阅读行为泄露给文档作者控制的图片服务器）；
+            // 仅当用户显式授权该文档后放行 https:。配合页面 no-referrer，即便放行也不携带文档路径。
+            var remoteImg = state.AllowRemoteImages ? " https:" : "";
+            var nonce = NewNonce();
+
             return $@"<!DOCTYPE html>
 <html{htmlClass}><head><meta charset='utf-8'/>
 <meta name='viewport' content='width=device-width,initial-scale=1'/>
-<meta http-equiv='Content-Security-Policy' content=""default-src 'self' https://appassets.example; script-src 'unsafe-inline' https://appassets.example; style-src 'unsafe-inline' https://appassets.example; img-src 'self' data: https://appassets.example; font-src 'self' data: https://appassets.example;"">
+<meta name='referrer' content='no-referrer'/>
+<meta http-equiv='Content-Security-Policy' content=""default-src 'self' https://appassets.example; script-src 'nonce-{nonce}' https://appassets.example; style-src 'unsafe-inline' https://appassets.example; img-src 'self' data: https://appassets.example{remoteImg}; font-src 'self' data: https://appassets.example;"">
 <link rel='stylesheet' href='{prismTheme}'/>
 <link rel='stylesheet' href='{katexCssUrl}'/>
 <style>{css}</style>
@@ -557,8 +627,8 @@ function setTheme(dark){{
 <script src='{katexJsUrl}'></script>
 <script src='{autoRenderJsUrl}'></script>
 <script src='{mermaidJsUrl}'></script>
-<script>{scrollScript}</script>
-<script>{SearchScript}</script>
+<script nonce='{nonce}'>{scrollScript}</script>
+<script nonce='{nonce}'>{SearchScript}</script>
 </body></html>";
         }
 
@@ -578,52 +648,7 @@ body {{ line-height:{LineHeight.ToString(System.Globalization.CultureInfo.Invari
 .content {{
   max-width:100%;
 }}
-.content h1,.content h2,.content h3,.content h4,.content h5,.content h6 {{ color:var(--heading); font-weight:600; margin:1em 0 .4em; line-height:1.3; }}
-.content h1 {{
-  font-size:1.5em; margin:.8em 0 .5em; padding-bottom:.3em; border-bottom:1px solid var(--h1-border);
-}}
-.content h2 {{
-  font-size:1.25em; padding-bottom:.2em; border-bottom:1px solid var(--border);
-}}
-.content h3 {{ font-size:1.1em; }}
-.content h4 {{ font-size:1em; }}
-.content h5 {{ font-size:.92em; }}
-.content h6 {{ font-size:.85em; color:var(--secondary); }}
-.content p {{
-  margin:.6em 0; font-size:{FontSize.ToString(System.Globalization.CultureInfo.InvariantCulture)}px; line-height:{LineHeight.ToString(System.Globalization.CultureInfo.InvariantCulture)};
-}}
-.content blockquote {{
-  border-left:3px solid var(--quote); background:var(--quote-bg);
-  padding:.5em 1em; margin:.8em 0; border-radius:0 4px 4px 0;
-  color:var(--quote-text);
-}}
-.content code {{
-  font-family:'Consolas','JetBrains Mono',monospace;
-  background:var(--code-bg); padding:2px 6px; border-radius:3px;
-  font-size:.9em;
-}}
-.content pre {{
-  background:var(--code-bg); padding:12px 16px; border-radius:8px;
-  overflow-x:auto; margin:.8em 0; font-size:12px; line-height:1.5;
-}}
-.content table {{
-  border-collapse:collapse; width:100%; margin:1em 0; font-size:.93em;
-}}
-.content th, .content td {{
-  border:1px solid var(--border); padding:6px 12px; text-align:left;
-}}
-.content th {{
-  background:var(--card); font-weight:600; color:var(--heading);
-}}
-.content tr:hover td {{
-  background:var(--row-hov);
-}}
-html.dark .content tr:hover td {{
-  background:rgba(255,255,255,.06);
-}}
-.content img {{
-  max-width:100%; border-radius:4px; margin:.5em 0;
-}}
+{MdDocumentCss}
 .page-break {{
   text-align:center; margin:32px 0; position:relative;
 }}
@@ -678,22 +703,24 @@ html.dark .excel-table tr:hover td {{ background:rgba(255,255,255,.06); }}
 ::-webkit-scrollbar-thumb:hover {{ background:var(--secondary); }}
 ";
             var htmlClass = isDark ? " class='dark'" : "";
+            var nonce = NewNonce();
 
             return $@"<!DOCTYPE html>
 <html{htmlClass}>
 <head>
 <meta charset='utf-8'>
 <meta name='viewport' content='width=device-width,initial-scale=1'>
-<meta http-equiv='Content-Security-Policy' content=""default-src 'self' https://appassets.example; script-src 'self' https://appassets.example 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data: https://appassets.example;"">
+<meta name='referrer' content='no-referrer'/>
+<meta http-equiv='Content-Security-Policy' content=""default-src 'self' https://appassets.example; script-src 'nonce-{nonce}' https://appassets.example; style-src 'unsafe-inline'; img-src 'self' data: https://appassets.example;"">
 <style>{css}</style>
 <script src=""https://appassets.example/scripts/office-theme.js""></script>
-<script>window.setTheme=function(dark){{var d=!!dark;document.documentElement.classList.toggle('dark',d);if(document.body)document.body.classList.toggle('dark',d);}};</script>
+<script nonce='{nonce}'>window.setTheme=function(dark){{var d=!!dark;document.documentElement.classList.toggle('dark',d);if(document.body)document.body.classList.toggle('dark',d);}};</script>
 </head>
 <body>
   <div class='content'>
     {bodyHtml}
   </div>
-<script>{SearchScript}</script>
+<script nonce='{nonce}'>{SearchScript}</script>
 </body>
 </html>";
         }
@@ -707,12 +734,14 @@ html.dark .excel-table tr:hover td {{ background:rgba(255,255,255,.06); }}
 
             // 鍙屽鍥哄畾鍊硷細:root 鎭掍寒鑹层?乭tml.dark 鎭掓殫鑹诧紙ThemeVars 鍞竴璋冭壊鏉匡級锛屼繚璇佷换鎰忎富棰樹笅鐢熸垚椤甸潰鍧囧彲鍙屽悜鍒囨崲
             var htmlClass = isDark ? " class='dark'" : "";
+            var nonce = NewNonce();
 
             return $@"<!DOCTYPE html>
 <html{htmlClass}>
 <head>
 <meta charset='utf-8'>
 <meta name='viewport' content='width=device-width,initial-scale=1'>
+<meta name='referrer' content='no-referrer'/>
 <style>
 {ThemeCss()}
 * {{ margin:0; padding:0; box-sizing:border-box; }}
@@ -778,10 +807,10 @@ h2 {{ font-size:14px; font-weight:600; color:var(--heading); flex:1; }}
       <div class='empty-hint'>拖拽文件到此 · Ctrl+O 打开</div>
     </div>
   </div>
-  <div id='tip' onclick='openFile()' title='点击打开文件'>
+  <div id='tip' title='点击打开文件'>
     <div class='tip-head'>
       <h2>欢迎使用 SeeMe</h2>
-      <button class='close' onclick='event.stopPropagation();dismiss()' title='关闭提示'>×</button>
+      <button id='tipClose' class='close' title='关闭提示'>×</button>
     </div>
     <div class='tip-body'>
       <div><kbd>Ctrl+O</kbd>打开文件</div>
@@ -789,10 +818,10 @@ h2 {{ font-size:14px; font-weight:600; color:var(--heading); flex:1; }}
       <div><kbd>Ctrl+0/+/鈭?</kbd>缂╂斁</div>
     </div>
     <div class='tip-foot'>
-      <button onclick='event.stopPropagation();dismissForever()'>不再显示</button>
+      <button id='tipNever'>不再显示</button>
     </div>
   </div>
-<script>
+<script nonce='{nonce}'>
 function setTheme(dark){{if(dark)document.documentElement.classList.add('dark');else document.documentElement.classList.remove('dark');}}
 function dismiss(){{var t=document.getElementById('tip');if(t)t.style.display='none';}}
 function openFile(){{
@@ -802,6 +831,9 @@ function dismissForever(){{
   try{{if(window.chrome&&chrome.webview)chrome.webview.postMessage(JSON.stringify({{kind:'dismiss-welcome'}}));}}catch(e){{}}
   dismiss();
 }}
+document.getElementById('tip').addEventListener('click', openFile);
+document.getElementById('tipClose').addEventListener('click', function(e){{e.stopPropagation();dismiss();}});
+document.getElementById('tipNever').addEventListener('click', function(e){{e.stopPropagation();dismissForever();}});
 </script>
 </body>
 </html>";

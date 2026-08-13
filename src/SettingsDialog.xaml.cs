@@ -64,6 +64,10 @@ namespace SeeMe
                 HistorySizeBox.SelectedIndex = hs switch { 10 => 0, 20 => 2, 50 => 3, _ => 1 };
                 var closeB = AppSettings.Get(AppSettings.CloseBehaviorKey, "exit");
                 CloseBehaviorBox.SelectedIndex = closeB == "tray" ? 1 : closeB == "ask" ? 2 : 0;
+                AutoSaveBox.IsChecked = AppSettings.Get(AppSettings.AutoSaveKey, true);
+                var autoDelay = AppSettings.Get(AppSettings.AutoSaveDelayKey, 10);
+                AutoSaveDelayBox.SelectedIndex = autoDelay switch { 5 => 0, 30 => 2, _ => 1 };
+                AutoSaveDelayBox.IsEnabled = AutoSaveBox.IsChecked == true;
 
                 // 外观
                 var mode = AppSettings.Get(AppSettings.ThemeModeKey, "light");
@@ -90,10 +94,6 @@ namespace SeeMe
                 else if (mdStyle == "simple") StyleSimple.IsChecked = true;
                 else StyleDefault.IsChecked = true;
                 EyeCareBox.IsChecked = AppSettings.Get(AppSettings.EyeCareKey, false);
-                var pz = AppSettings.Get(AppSettings.PdfZoomModeKey, "fitWidth");
-                PdfZoomBox.SelectedIndex = pz == "fitPage" ? 1 : pz == "actual" ? 2 : 0;
-                PdfPageModeBox.SelectedIndex = AppSettings.Get(AppSettings.PdfPageModeKey, "scroll") == "paged" ? 1 : 0;
-                PdfDblClickBox.IsChecked = AppSettings.Get(AppSettings.PdfDblClickZoomKey, true);
 
                 // 快捷键
                 FillKeymap();
@@ -259,6 +259,22 @@ namespace SeeMe
 
         private void StatusBarHint(string msg) => System.Diagnostics.Debug.WriteLine("[SeeMe] " + msg);
 
+        private void OnAutoSaveChanged(object sender, RoutedEventArgs e)
+        {
+            if (_loading || sender is not CheckBox cb) return;
+            AppSettings.Set(AppSettings.AutoSaveKey, cb.IsChecked == true);
+            AutoSaveDelayBox.IsEnabled = cb.IsChecked == true; // 关闭自动保存时禁用间隔选择
+            _owner.ApplyAutoSaveSettingsNow(); // 正在编辑的面板即时生效
+        }
+
+        private void OnAutoSaveDelayChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_loading || AutoSaveDelayBox.SelectedIndex < 0) return;
+            var s = AutoSaveDelayBox.SelectedIndex switch { 0 => 5, 2 => 30, _ => 10 };
+            AppSettings.Set(AppSettings.AutoSaveDelayKey, s);
+            _owner.ApplyAutoSaveSettingsNow(); // 正在编辑的面板即时生效
+        }
+
         private void OnCloseBehaviorChanged(object sender, SelectionChangedEventArgs e)
         {
             if (_loading || CloseBehaviorBox.SelectedIndex < 0) return;
@@ -292,25 +308,6 @@ namespace SeeMe
             if (_loading || sender is not RadioButton rb || rb.IsChecked != true) return;
             var mode = rb == ThemeDark ? "dark" : rb == ThemeSystem ? "system" : "light";
             _owner.ApplyThemeMode(mode);
-        }
-
-        private void OnPdfZoomChanged(object sender, SelectionChangedEventArgs e)
-        {
-            if (_loading || PdfZoomBox.SelectedIndex < 0) return;
-            var mode = PdfZoomBox.SelectedIndex switch { 1 => "fitPage", 2 => "actual", _ => "fitWidth" };
-            AppSettings.Set(AppSettings.PdfZoomModeKey, mode);
-        }
-
-        private void OnPdfPageModeChanged(object sender, SelectionChangedEventArgs e)
-        {
-            if (_loading || PdfPageModeBox.SelectedIndex < 0) return;
-            AppSettings.Set(AppSettings.PdfPageModeKey, PdfPageModeBox.SelectedIndex == 1 ? "paged" : "scroll");
-        }
-
-        private void OnPdfDblClickChanged(object sender, RoutedEventArgs e)
-        {
-            if (_loading) return;
-            AppSettings.Set(AppSettings.PdfDblClickZoomKey, PdfDblClickBox.IsChecked == true);
         }
 
         private void OnDefaultZoomChanged(object sender, SelectionChangedEventArgs e)

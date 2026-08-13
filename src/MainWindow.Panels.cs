@@ -105,10 +105,22 @@ namespace SeeMe
             catch { }
         }
 
+        /// <summary>按当前文件类型控制「编辑」按钮显隐：md/txt/html/css/js/json 与 docx 可编辑，其余隐藏。</summary>
+        private void UpdateEditButtonVisibility()
+        {
+            try
+            {
+                EditBtnL.Visibility = CanEditFile(_app.Left?.CurrentFile) ? Visibility.Visible : Visibility.Collapsed;
+                EditBtnR.Visibility = CanEditFile(_app.Right?.CurrentFile) ? Visibility.Visible : Visibility.Collapsed;
+            }
+            catch { }
+        }
+
         /// <summary>左标题栏 ⋯ 溢出菜单（窄面板时替代三个图标按钮）。</summary>
         private void OnTitleBarOverflowL(object sender, RoutedEventArgs e)
         {
             ShowTitleBarOverflowMenu(TitleBarOverflowL,
+                (_, _) => OnToggleEditL(sender, e),
                 (_, _) => OnExportL(sender, e),
                 (_, _) => OnOpenL(sender, e),
                 (_, _) => OnToggleSplit(sender, e));
@@ -118,6 +130,7 @@ namespace SeeMe
         private void OnTitleBarOverflowR(object sender, RoutedEventArgs e)
         {
             ShowTitleBarOverflowMenu(TitleBarOverflowR,
+                (_, _) => OnToggleEditR(sender, e),
                 (_, _) => OnExportR(sender, e),
                 (_, _) => OnOpenR(sender, e),
                 (_, _) => OnToggleSplit(sender, e));
@@ -130,7 +143,7 @@ namespace SeeMe
         private void ShowTitleBarOverflowMenu(Button anchor, params RoutedEventHandler[] handlers)
         {
             var menu = new ContextMenu();
-            string[] labels = { "导出 (pandoc)", "打开文件", "切换分栏 (Ctrl+T)" };
+            string[] labels = { "编辑 (Ctrl+S)", "导出 (pandoc)", "打开文件", "切换分栏 (Ctrl+T)" };
             for (int i = 0; i < labels.Length && i < handlers.Length; i++)
                 menu.Items.Add(BuildOverflowItem(labels[i], handlers[i]));
             menu.PlacementTarget = anchor;
@@ -180,11 +193,16 @@ namespace SeeMe
                 {
                     InfoFileName.Text = Path.GetFileName(state.CurrentFile);
                     InfoFilePath.Text = Path.GetDirectoryName(state.CurrentFile) ?? "";
+                    var fi = new FileInfo(state.CurrentFile);
+                    InfoFileSize.Text = _converter.FormatSizeBytes(fi.Length);
+                    InfoModified.Text = fi.LastWriteTime.ToString("yyyy-MM-dd HH:mm");
                 }
                 else
                 {
                     InfoFileName.Text = "未打开文件";
                     InfoFilePath.Text = "未打开文件";
+                    InfoFileSize.Text = "—";
+                    InfoModified.Text = "—";
                 }
                 RefreshBacklinks(state);
                 RefreshStats(state);
@@ -193,41 +211,109 @@ namespace SeeMe
         }
 
         /// <summary>
-        /// 刷新信息面板「文件统计」卡（字数/行数/页数）。仅 Markdown 统计；
-        /// PDF/Office 无文本可数显示「—」。后台线程读取，避免大文件卡 UI；超 2MB 只提示不统计。
+        /// 刷新信息面板「文件统计」卡（字数/行数/页数）。
+        /// Markdown 读原文本；PDF 用 anydoc 提取的文本层（无文本层显示 —，页数取 PDF.js 上报或扫描文件）；
+        /// Office 用 anydoc 提取的 Markdown（.xls / FileConverter 回退无源文本显示 —）。
+        /// 后台线程读取，避免大文件卡 UI；md 超 2MB 只提示不统计。
         /// </summary>
         private async void RefreshStats(PanelState state)
         {
             try
             {
                 var path = state.CurrentFile;
-                if (string.IsNullOrEmpty(path) || !File.Exists(path)
-                    || !FileTypes.IsMarkdown(Path.GetExtension(path)))
+                if (string.IsNullOrEmpty(path) || !File.Exists(path))
                 {
                     SetStats("—", "—", "—");
                     return;
                 }
+                var ext = Path.GetExtension(path);
 
-                var stats = await Task.Run(() =>
+                // ── Markdown ──
+                if (FileTypes.IsMarkdown(ext))
                 {
-                    var fi = new FileInfo(path);
-                    if (fi.Length > 2L * 1024 * 1024) return (-1, -1); // 超限仅提示
-                    var text = ReadTextAuto(path);
-                    var (cjk, words) = CountTextStats(text);
-                    var lines = text.Split('\n').Length;
-                    return (cjk + words, lines);
-                });
-
-                if (stats.Item1 < 0)
-                {
-                    SetStats(">2MB", "—", "—");
+                    var stats = await Task.Run(() =>
+                    {
+                        var fi = new FileInfo(path);
+                        if (fi.Length > 2L * 1024 * 1024) return (-1, -1); // 超限仅提示
+                        var text = ReadTextAuto(path);
+                        var (cjk, words) = CountTextStats(text);
+                        var lines = text.Split('\n').Length;
+                        return (cjk + words, lines);
+                    });
+                    if (stats.Item1 < 0) { SetStats(">2MB", "—", "—"); return; }
+                    // 页数估算：约 45 行/页（对齐草图：86 行 ≈ 2 页）
+                    var pages = Math.Max(1, (int)Math.Ceiling(stats.Item2 / 45.0));
+                    SetStats(stats.Item1.ToString("N0"), stats.Item2.ToString("N0"), pages.ToString("N0"));
                     return;
                 }
-                // 页数估算：约 45 行/页（对齐草图：86 行 ≈ 2 页）
-                var pages = Math.Max(1, (int)Math.Ceiling(stats.Item2 / 45.0));
-                SetStats(stats.Item1.ToString("N0"), stats.Item2.ToString("N0"), pages.ToString("N0"));
+
+                // ── PDF（anydoc 提取的文本层统计；无文本层 → 仅显示页数）──
+                if (FileTypes.IsPdf(ext))
+                {
+                    string text = state.PdfText ?? "";
+                    bool scanned = false, unknown = false;
+                    if (string.IsNullOrEmpty(text))
+                    {
+                        if (PdfTextCache.TryRead(path, out var t, out var hasText))
+                        {
+                            if (hasText) text = t ?? "";
+                            else scanned = true;
+                        }
+                        else unknown = true;
+                    }
+                    if (unknown) { SetStats("—", "—", "—"); return; } // 尚未提取
+                    if (scanned)
+                    {
+                        SetStats("—", "—", CountPdfPages(path) > 0 ? CountPdfPages(path).ToString("N0") : "—");
+                        return;
+                    }
+                    var pdfStats = await Task.Run(() =>
+                    {
+                        var (cjk, words) = CountTextStats(text);
+                        var lines = text.Split('\n').Length;
+                        var pg = CountPdfPages(path);
+                        return (cjk + words, lines, pg);
+                    });
+                    SetStats(pdfStats.Item1.ToString("N0"), pdfStats.Item2.ToString("N0"),
+                             pdfStats.Item3 > 0 ? pdfStats.Item3.ToString("N0") : "—");
+                    return;
+                }
+
+                // ── Office（anydoc 提取的 Markdown）──
+                var office = await Task.Run(() =>
+                {
+                    var md = state.DocxMarkdown;
+                    if (string.IsNullOrEmpty(md)) return (-1, -1, -1);
+                    var (cjk, words) = CountTextStats(md);
+                    var lines = md.Split('\n').Length;
+                    var pages = Math.Max(1, (int)Math.Ceiling(lines / 45.0));
+                    return (cjk + words, lines, pages);
+                });
+                if (office.Item1 < 0) { SetStats("—", "—", "—"); return; }
+                SetStats(office.Item1.ToString("N0"), office.Item2.ToString("N0"), office.Item3.ToString("N0"));
             }
             catch (Exception ex) { LogErr("RefreshStats: " + ex.Message); }
+        }
+
+        /// <summary>粗略统计 PDF 页数：扫描文件字节中的 "/Type /Page"（排除 "/Type /Pages"）。
+        /// 对象流压缩的 PDF 可能低估，仅作估算（文本视图下无其他页数来源）。</summary>
+        private static int CountPdfPages(string path)
+        {
+            try
+            {
+                var bytes = File.ReadAllBytes(path);
+                int count = 0;
+                for (int i = 0; i + 11 < bytes.Length; i++)
+                {
+                    if (bytes[i] == (byte)'/' && bytes[i + 1] == (byte)'T' && bytes[i + 2] == (byte)'y'
+                        && bytes[i + 3] == (byte)'p' && bytes[i + 4] == (byte)'e' && bytes[i + 5] == (byte)' '
+                        && bytes[i + 6] == (byte)'/' && bytes[i + 7] == (byte)'P' && bytes[i + 8] == (byte)'a'
+                        && bytes[i + 9] == (byte)'g' && bytes[i + 10] == (byte)'e' && bytes[i + 11] != (byte)'s')
+                        count++;
+                }
+                return count;
+            }
+            catch { return 0; }
         }
 
         /// <summary>写「文件统计」卡三个数值（跨线程安全）。</summary>
@@ -337,7 +423,7 @@ namespace SeeMe
             if (visible)
             {
                 InfoPanel.Visibility = Visibility.Visible;
-                InfoPanelCol.Width = new GridLength(220);
+                InfoPanelCol.Width = new GridLength(190);
                 if (InfoPanelToggleIcon != null)
                     InfoPanelToggleIcon.Data = (Geometry)FindResource("IconChevronRight");
                 InfoPanelToggleBtn.ToolTip = "隐藏信息面板";

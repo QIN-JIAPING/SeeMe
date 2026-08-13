@@ -40,9 +40,9 @@ namespace SeeMe
         public const string LineHeightKey        = "lineHeight";       // 1.4 / 1.65 / 2.0
         public const string AnimationsKey        = "animations";       // bool（主题过渡动画）
         public const string CloseBehaviorKey     = "closeBehavior";    // exit / tray / ask
-        public const string PdfZoomModeKey        = "pdfZoomMode";      // fitWidth / fitPage / actual
-        public const string PdfPageModeKey        = "pdfPageMode";      // scroll / paged
-        public const string PdfDblClickZoomKey    = "pdfDblClickZoom";  // bool（双击放大）
+        public const string AutoSaveKey           = "autoSave";         // bool（编辑模式自动保存）
+        public const string AutoSaveDelayKey      = "autoSaveDelay";    // int 秒（5 / 10 / 30）
+        public const string RemoteImageAllowKey   = "remoteImageAllow"; // string[]（允许加载远程图片的文档路径）
 
         private static readonly Dictionary<string, JsonNode?> Cache = LoadAll();
 
@@ -135,6 +135,49 @@ namespace SeeMe
             }
             catch { }
             return "light";
+        }
+
+        /// <summary>该文档是否已被用户授权加载远程图片（路径大小写不敏感）。</summary>
+        public static bool IsRemoteImageAllowed(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return false;
+            try
+            {
+                if (Cache.TryGetValue(RemoteImageAllowKey, out var v) && v is JsonArray arr)
+                {
+                    foreach (var item in arr)
+                    {
+                        if (item != null && item.GetValueKind() == JsonValueKind.String
+                            && string.Equals(item.GetValue<string>(), path, StringComparison.OrdinalIgnoreCase))
+                            return true;
+                    }
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        /// <summary>记录/撤销该文档的远程图片授权（合并写盘，不覆盖其他设置）。</summary>
+        public static void SetRemoteImageAllowed(string path, bool allow)
+        {
+            if (string.IsNullOrEmpty(path)) return;
+            var arr = new JsonArray();
+            try
+            {
+                if (Cache.TryGetValue(RemoteImageAllowKey, out var v) && v is JsonArray old)
+                {
+                    foreach (var item in old)
+                    {
+                        if (item == null || item.GetValueKind() != JsonValueKind.String) continue;
+                        var s = item.GetValue<string>();
+                        if (string.Equals(s, path, StringComparison.OrdinalIgnoreCase)) continue; // 去掉旧条目
+                        arr.Add(s);
+                    }
+                }
+                if (allow) arr.Add(path);
+            }
+            catch { arr = new JsonArray(); if (allow) arr.Add(path); }
+            Set(RemoteImageAllowKey, arr);
         }
     }
 }

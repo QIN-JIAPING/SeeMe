@@ -60,7 +60,9 @@ namespace SeeMe
             UpdateThemeButton();
 
             Loaded += OnLoaded;
-            KeyDown += OnWindowKeyDown;
+            // PreviewKeyDown（隧道）而非 KeyDown（冒泡）：WebView2 有焦点时按键先经父窗口，
+            // 保证 Ctrl+0/+/−、F5 等快捷键在文档页内也能被宿主拦截，不被浏览器/WebView2 吃掉。
+            PreviewKeyDown += OnWindowKeyDown;
             SizeChanged += OnWindowSizeChanged;
             AllowDrop = true;
             Drop += OnDrop;
@@ -358,6 +360,28 @@ namespace SeeMe
             _theme.AnimationsEnabled = on;
         }
 
+        /// <summary>
+        /// 自动保存开关/间隔变更时对正在编辑的面板即时生效：向编辑页注入 __setAutoSave，
+        /// 不重建页面、不丢失正在编辑的内容（未打开编辑页则下次进入编辑时生效）。
+        /// </summary>
+        public void ApplyAutoSaveSettingsNow()
+        {
+            if (_app == null) return;
+            var on = AppSettings.Get(AppSettings.AutoSaveKey, true) ? "true" : "false";
+            var delayMs = AppSettings.Get(AppSettings.AutoSaveDelayKey, 10) * 1000;
+            foreach (var st in new[] { _app.Left, _app.Right })
+            {
+                if (st?.EditMode != true || st.WebView?.CoreWebView2 == null) continue;
+                try
+                {
+                    st.WebView.CoreWebView2.ExecuteScriptAsync(
+                        $"window.__setAutoSave ? window.__setAutoSave({on}, {delayMs}) : ''");
+                }
+                catch (Exception ex) { LogErr("ApplyAutoSaveSettingsNow: " + ex.Message); }
+            }
+        }
+
+        /// <summary>PDF 查看器顶栏状态徽标：显示文本层已提取 / 扫描版无文本层（提取完成且面板为 PDF 时）。</summary>
         /// <summary>字号/行高变更：持久化并重渲染（缩放倍数以新字号为基础）。</summary>
         public void ApplyFontSettingsNow()
         {
@@ -476,6 +500,7 @@ namespace SeeMe
             state.WebView.NavigateToString(html);
             state.TitleText.Text = "未选择";
             state.TitleText.ToolTip = null;
+            UpdateEditButtonVisibility();
         }
 
         private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -518,9 +543,24 @@ namespace SeeMe
                 var env = await CoreWebView2Environment.CreateAsync(null, webviewDataDir);
                 await WebViewL.EnsureCoreWebView2Async(env);
                 await WebViewR.EnsureCoreWebView2Async(env);
+                // 后台 PDF 文本层提取专用（隐藏）：与面板共享同一环境
+                await ExtractView.EnsureCoreWebView2Async(env);
 
                 // 定期清理 WebView2 浏览数据缓存（含打开过的 PDF/文档残留），默认 7 天一清；不影响设置/历史
                 TryClearWebViewCacheIfDue();
+
+                // 禁用浏览器级缩放（Ctrl+滚轮 / Ctrl++ / Ctrl+-）：
+                // 否则焦点在 WebView2 内时按键被浏览器吃掉，走 ZoomFactor 整体缩放——整个页面
+                // （含 PDF 工具条 #bar、Markdown 顶栏）一起放大，绕开 C# SetZoom 的内容级缩放链路。
+                // 禁用后按键冒泡回 WPF KeyDown，由 SetZoom 统一走 __seemeApplyZoom / fontSize 注入。
+                WebViewL.CoreWebView2.Settings.IsZoomControlEnabled = false;
+                WebViewR.CoreWebView2.Settings.IsZoomControlEnabled = false;
+                ExtractView.CoreWebView2.Settings.IsZoomControlEnabled = false;
+                // 关闭开发者工具：应用渲染的是不可信文档，XSS 成功后 DevTools 会放大攻击面
+                // （可读页面全部 JS/数据、执行任意表达式、辅助进一步渗透）。本地阅读器无需调试。
+                WebViewL.CoreWebView2.Settings.AreDevToolsEnabled = false;
+                WebViewR.CoreWebView2.Settings.AreDevToolsEnabled = false;
+                ExtractView.CoreWebView2.Settings.AreDevToolsEnabled = false;
             }
             catch (Exception ex)
             {
@@ -534,6 +574,15 @@ namespace SeeMe
             var resRoot = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources");
             WebViewL.CoreWebView2.SetVirtualHostNameToFolderMapping(RenderService.VirtualHost, resRoot, CoreWebView2HostResourceAccessKind.Allow);
             WebViewR.CoreWebView2.SetVirtualHostNameToFolderMapping(RenderService.VirtualHost, resRoot, CoreWebView2HostResourceAccessKind.Allow);
+            ExtractView.CoreWebView2.SetVirtualHostNameToFolderMapping(RenderService.VirtualHost, resRoot, CoreWebView2HostResourceAccessKind.Allow);
+
+            // 收窄文档虚拟主机暴露面（docfiles.example / pdffiles.example）：
+            // SetVirtualHostNameToFolderMapping 会把整个文档目录映射出去，页面（尤其被注入 JS 的
+            // 恶意文档）可 fetch 同目录任意文件。注册 WebResourceRequested 白名单——只放行与
+            // 当前打开文件同名的请求，其余一律 403。
+            GuardDocumentHost(WebViewL, () => _app.Left?.CurrentFile);
+            GuardDocumentHost(WebViewR, () => _app.Right?.CurrentFile);
+            GuardDocumentHost(ExtractView, () => _app.Left?.AnyDocPending?.File ?? _app.Right?.AnyDocPending?.File);
 
             // 初始 PreferredColorScheme：滚动条/空白区/表单控件跟随主题，避免系统默认白色
             try
@@ -579,19 +628,16 @@ window.addEventListener('drop',function(e){
             WebViewR.CoreWebView2.NewWindowRequested += (_, ea) => OnNewWindowRequested(ea);
             WebViewL.CoreWebView2.WebMessageReceived += (_, ea) => OnWebMessage(_app.Left!, ea);
             WebViewR.CoreWebView2.WebMessageReceived += (_, ea) => OnWebMessage(_app.Right!, ea);
+            // 隐藏提取 WebView：anydoc-result 按令牌匹配对应面板（支持双栏并发提取）
+            ExtractView.CoreWebView2.WebMessageReceived += (_, ea) => OnExtractMessage(ea);
             // 渲染进程崩溃恢复：记录 + 自动重载当前文件；连续崩溃 >= 3 次（5 秒窗口）停止重载并提示
             WebViewL.CoreWebView2.ProcessFailed += (_, ea) => OnProcessFailed(_app.Left!, ea);
             WebViewR.CoreWebView2.ProcessFailed += (_, ea) => OnProcessFailed(_app.Right!, ea);
-
-            // 注：PDF 虚拟主机（SetVirtualHostNameToFolderMapping）的请求不经 WebResourceRequested，
-            // 无法用网络层事件观察 Range；已在 viewer.js 的 blob worker 里注入统计探针（kind:pdf 上报）。
 
             // 导航完成后补推一次主题：任何页面（含错误/加载/占位页）加载完都必然收到当前主题，
             // 即使切换发生在导航进行中，也不会出现"外壳变了 body 没变"的时序窗口。
             WebViewL.NavigationCompleted += (_, _) => { _ = PushThemeAsync(_theme.Current == _theme.Dark); ApplyPanelZoom(_app.Left); };
             WebViewR.NavigationCompleted += (_, _) => { _ = PushThemeAsync(_theme.Current == _theme.Dark); ApplyPanelZoom(_app.Right); };
-            // 调试：WebView 控制台消息（含 JS 错误/CSP 拦截/import 失败）转发到日志，便于诊断 PDF.js 等页面问题
-            // 注：CoreWebView2 在本 SDK 版本无 ConsoleMessage 事件，改用 viewer.js 内 postMessage 上报（kind:pdf）。
 
             // 面板宽度变化（窗口缩放/拖分隔条）时刷新标题栏按钮折叠状态
             WebViewL.SizeChanged += (_, _) => UpdateTitleBarOverflow();
@@ -692,7 +738,7 @@ window.addEventListener('drop',function(e){
             else if (hasLeft)
                 StatusText.Text = "提示：拖入另一个文件到右栏可对比阅读";
             else
-                StatusText.Text = "Ctrl+O 打开 ？直接拖入 md/pdf/xlsx/pptx/docx 文件 ？Ctrl+T 分栏";
+                StatusText.Text = "Ctrl+O 打开 ？直接拖入 md/pdf/Office/epub/csv 文件 ？Ctrl+T 分栏";
             UpdateWindowTitle();
         }
 
@@ -800,6 +846,40 @@ window.addEventListener('drop',function(e){
             OpenInSystemBrowser(uri);
         }
 
+        /// <summary>
+        /// 收窄文档虚拟主机（docfiles.example / pdffiles.example）的暴露面：
+        /// 目录映射本身无法限制到单文件，这里用 WebResourceRequested 做白名单——
+        /// 仅放行与当前打开文件同名的请求，其余一律 403。
+        /// 这样即使页面（恶意文档注入的 JS）发起 fetch，也只能取到当前文档本身，
+        /// 无法读取同目录的其他文件。
+        /// </summary>
+        private void GuardDocumentHost(WebView2 view, Func<string?> allowedFile)
+        {
+            var core = view.CoreWebView2;
+            core.AddWebResourceRequestedFilter("https://docfiles.example/*", CoreWebView2WebResourceContext.All);
+            core.AddWebResourceRequestedFilter("https://pdffiles.example/*", CoreWebView2WebResourceContext.All);
+            core.WebResourceRequested += (_, ea) =>
+            {
+                try
+                {
+                    var uri = new Uri(ea.Request.Uri);
+                    // AbsolutePath 对中文/空格文件名是 %XX 编码形式，先解码再取文件名，
+                    // 否则中文文件名请求会被误杀（403）。
+                    var reqName = Path.GetFileName(System.Uri.UnescapeDataString(uri.AbsolutePath));
+                    var allow = allowedFile();
+                    var allowName = string.IsNullOrEmpty(allow) ? "" : Path.GetFileName(allow);
+                    if (string.IsNullOrEmpty(reqName)
+                        || !string.Equals(reqName, allowName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        ea.Response = core.Environment.CreateWebResourceResponse(
+                            null, 403, "Forbidden", "Content-Type: text/plain");
+                        LogWarn("Blocked doc-host resource: " + ea.Request.Uri);
+                    }
+                }
+                catch { /* 解析失败不拦截，避免误伤正常渲染 */ }
+            };
+        }
+
         /// <summary>WebView2 渲染进程崩溃恢复：记录 + 自动重载当前文件；连续崩溃 >= 3 次（5 秒窗口）停止重载。</summary>
         private void OnProcessFailed(PanelState state, CoreWebView2ProcessFailedEventArgs e)
         {
@@ -884,23 +964,35 @@ window.addEventListener('drop',function(e){
                 var root = doc.RootElement;
                 if (!root.TryGetProperty("kind", out var kindEl)) return;
                 var kind = kindEl.GetString();
-                if (kind == "pdf")
+                if (kind == "pdf-read-log")
                 {
-                    // PDF.js 查看器状态上报。仅记录错误路径（避免每次打开 PDF 刷屏日志）；
-                    // NavigateToString 页 Source 为 about:blank，因此仅对空/空白 Source 放行，其余仍走来源校验。
-                    var pdfSrcOk = string.IsNullOrEmpty(e.Source) || e.Source == "about:blank";
-                    if (pdfSrcOk && root.TryGetProperty("msg", out var pdfEl))
+                    // PDF 图文重建诊断日志（浏览器端上报 → error.log，排查图片/文本重建问题）
+                    var msg = root.TryGetProperty("msg", out var mEl) ? mEl.GetString() : "";
+                    if (!string.IsNullOrEmpty(msg)) LogInfo("[PDF-READ] " + msg);
+                    return;
+                }
+                if (kind == "pdf-outline")
+                {
+                    // PDF 文本视图大纲：重建脚本完成时上报书签/标题/页标记；令牌校验防过期页面覆盖
+                    var tok = root.TryGetProperty("token", out var tokEl) ? tokEl.GetString() : "";
+                    if (string.IsNullOrEmpty(tok) || tok != state.PdfOutlineToken) return;
+                    if (!root.TryGetProperty("items", out var itemsEl)) return;
+                    var list = new List<TocItem>();
+                    foreach (var itEl in itemsEl.EnumerateArray())
                     {
-                        var pdfMsg = pdfEl.GetString();
-                        // 仅记录错误、成功摘要与加载模式（每文档一条），跳过 worker/进度等详细步骤日志
-                        if (!string.IsNullOrEmpty(pdfMsg) && (pdfMsg.Contains("load error") || pdfMsg.Contains("loaded ") || pdfMsg.Contains("stream mode") || pdfMsg.Contains("buffer mode")))
-                            LogErr("[PDF] " + pdfMsg);
+                        var title = itEl.TryGetProperty("t", out var tEl) ? tEl.GetString() ?? "" : "";
+                        var level = itEl.TryGetProperty("l", out var lEl) ? lEl.GetInt32() : 1;
+                        var id = itEl.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? "" : "";
+                        if (!string.IsNullOrEmpty(title) && !string.IsNullOrEmpty(id))
+                            list.Add(new TocItem { Title = title, Level = Math.Max(1, Math.Min(6, level)), Id = id });
                     }
+                    SetOutline(list.Count > 0 ? list : null);
                     return;
                 }
                 // 来源校验：仅接受来自当前 WebView 已加载页面的消息，防止伪造 postMessage 干扰 UI 或触发外链。
+                // 任一来源为空（导航早期窗口）一律拒绝——宁可丢消息，不可放行来源不明的伪造消息。
                 var webSrc = state.WebView?.CoreWebView2?.Source;
-                if (!string.IsNullOrEmpty(e.Source) && !string.IsNullOrEmpty(webSrc) && e.Source != webSrc)
+                if (string.IsNullOrEmpty(e.Source) || string.IsNullOrEmpty(webSrc) || e.Source != webSrc)
                     return;
                 if (kind == "scroll" && root.TryGetProperty("y", out var yEl))
                 {
@@ -946,6 +1038,58 @@ window.addEventListener('drop',function(e){
                             OpenDroppedFiles(FilterSupportedFiles(paths), total)));
                     }
                 }
+                else if (kind == "edit-save" && root.TryGetProperty("text", out var textEl))
+                {
+                    // 编辑页 Ctrl+S：把 textarea 内容写回文件（文本原样写；docx 经 pandoc 回写）
+                    SaveEdit(state, textEl.GetString() ?? "");
+                    return;
+                }
+                else if (kind == "anydoc-result" && root.TryGetProperty("id", out var anyIdEl))
+                {
+                    // anydoc-wasm 转换结果回传：令牌 + 源文件双重校验，过期/跨文件/伪造消息一律忽略
+                    var id = anyIdEl.GetString();
+                    var pending = state.AnyDocPending;
+                    if (pending == null || pending.Token != id || pending.File != state.CurrentFile)
+                        return;
+                    state.AnyDocPending = null;
+                    var ok = root.TryGetProperty("ok", out var okEl) && okEl.GetBoolean();
+                    if (pending.PdfExtract)
+                    {
+                        // PDF 文本层提取模式：结果只写缓存/标记，不渲染（RenderPdf 继续显示 PDF.js）
+                        if (ok && root.TryGetProperty("markdown", out var pdfMdEl)
+                            && !string.IsNullOrEmpty(pdfMdEl.GetString()))
+                        {
+                            var pdfMd = pdfMdEl.GetString()!;
+                            state.PdfText = pdfMd;
+                            state.PdfTextLayer = true;
+                            PdfTextCache.Write(state.CurrentFile, pdfMd);
+                            LogInfo("PDF text layer: " + Path.GetFileName(state.CurrentFile) + " (" + pdfMd.Length + " chars)");
+                        }
+                        else
+                        {
+                            state.PdfText = "";
+                            state.PdfTextLayer = false;
+                            PdfTextCache.WriteNoText(state.CurrentFile);
+                            LogInfo("PDF scan (no text layer): " + Path.GetFileName(state.CurrentFile));
+                        }
+                        pending.ExtractTcs?.TrySetResult(true);
+                        _ = Dispatcher.BeginInvoke(new Action(() => RefreshStats(state))); // 提取完成 → 统计卡刷新
+                        return;
+                    }
+                    if (ok && root.TryGetProperty("markdown", out var mdEl)
+                        && !string.IsNullOrEmpty(mdEl.GetString()))
+                    {
+                        var md = mdEl.GetString();
+                        Dispatcher.BeginInvoke(new Action(async () => await RenderAnyDocMarkdownAsync(state, md!)));
+                    }
+                    else
+                    {
+                        if (root.TryGetProperty("error", out var errEl) && !string.IsNullOrEmpty(errEl.GetString()))
+                            LogErr("AnyDoc convert: " + errEl.GetString());
+                        Dispatcher.BeginInvoke(new Action(async () => await FallbackOfficeAsync(state, pending.Ext)));
+                    }
+                    return;
+                }
                 else if (kind == "link" && root.TryGetProperty("href", out var hrefEl))
                 {
                     var href = hrefEl.GetString();
@@ -990,6 +1134,68 @@ window.addEventListener('drop',function(e){
                 }
             }
             catch (Exception ex) { LogErr("Web msg parse: " + ex.Message + " | raw=" + (raw ?? "<null>")); }
+        }
+
+        /// <summary>
+        /// 隐藏提取 WebView 的消息入口：anydoc-result 按令牌匹配正在提取的面板（双栏并发安全），
+        /// PDF 文本层结果只写缓存/标记，不渲染；完成后刷新统计卡与查看器徽标。
+        /// </summary>
+        private void OnExtractMessage(CoreWebView2WebMessageReceivedEventArgs e)
+        {
+            string? raw = null;
+            try
+            {
+                raw = e.TryGetWebMessageAsString();
+                if (string.IsNullOrEmpty(raw)) return;
+                using var doc = System.Text.Json.JsonDocument.Parse(raw);
+                var root = doc.RootElement;
+                if (!root.TryGetProperty("kind", out var kindEl) || kindEl.GetString() != "anydoc-result") return;
+                if (!root.TryGetProperty("id", out var idEl)) return;
+
+                // 按令牌找到发起提取的面板（AnyDocPending 每面板单槽，双栏并发各自匹配）
+                PanelState? state = null;
+                foreach (var st in new[] { _app.Left, _app.Right })
+                {
+                    if (st?.AnyDocPending is { PdfExtract: true } p && p.Token == idEl.GetString())
+                    { state = st; break; }
+                }
+                if (state == null) return;
+                var pending = state.AnyDocPending;
+                if (pending == null || pending.File != state.CurrentFile) return;
+                state.AnyDocPending = null;
+
+                var ok = root.TryGetProperty("ok", out var okEl) && okEl.GetBoolean();
+                if (ok && root.TryGetProperty("markdown", out var mdEl) && !string.IsNullOrEmpty(mdEl.GetString()))
+                {
+                    var md = mdEl.GetString()!;
+                    state.PdfText = md;
+                    state.PdfTextLayer = true;
+                    PdfTextCache.Write(state.CurrentFile, md);
+                    LogInfo("PDF text layer: " + Path.GetFileName(state.CurrentFile) + " (" + md.Length + " chars)");
+                }
+                else if (ok)
+                {
+                    // anydoc 成功但无文本 → 真·扫描版：写 .no 标记（仅此类写入，避免污染缓存）
+                    state.PdfText = "";
+                    state.PdfTextLayer = false;
+                    PdfTextCache.WriteNoText(state.CurrentFile);
+                    LogInfo("PDF scan (no text layer): " + Path.GetFileName(state.CurrentFile));
+                }
+                else
+                {
+                    // 提取出错（worker/fetch/wasm 失败）：不写 .no——否则错误被当作"扫描版"永久缓存，
+                    // 后续打开不再重试（曾致文本型 PDF 永远进不了文本视图）。
+                    state.PdfText = "";
+                    state.PdfTextLayer = null;
+                    var err = root.TryGetProperty("error", out var errEl) ? errEl.GetString() : "";
+                    LogErr("Pdf text extract failed: " + Path.GetFileName(state.CurrentFile)
+                           + (string.IsNullOrEmpty(err) ? "" : " | " + err));
+                }
+                pending.ExtractTcs?.TrySetResult(true);
+                // 查看器已先行显示：刷新统计卡 + 注入文本层/扫描版徽标
+                _ = Dispatcher.BeginInvoke(new Action(() => RefreshStats(state)));
+            }
+            catch (Exception ex) { LogErr("Extract msg: " + ex.Message + " | raw=" + (raw ?? "<null>")); }
         }
 
         private void OnOpenL(object sender, RoutedEventArgs e)

@@ -252,12 +252,27 @@
                                     <ComboBoxItem Content="每次询问"/>
                                 </ComboBox>
                             </Grid>
-                            <Border Style="{StaticResource Placeholder}">
-                                <StackPanel>
-                                    <TextBlock Style="{StaticResource RowLabel}" Text="自动保存（文档预览自动刷新已有；工作区自动保存 · 即将支持）" Opacity="0.5"/>
-                                    <TextBlock Style="{StaticResource SubNote}" Text="FileSystemWatcher 实时刷新已内置，无需配置。" Margin="0,4,0,0"/>
-                                </StackPanel>
-                            </Border>
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="150"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Style="{StaticResource RowLabel}" Text="编辑自动保存"/>
+                                <CheckBox x:Name="AutoSaveBox" Grid.Column="1" Content="输入停顿后自动保存（免手动 Ctrl+S）" FontSize="12"
+                                          VerticalAlignment="Center" Checked="OnAutoSaveChanged" Unchecked="OnAutoSaveChanged"/>
+                            </Grid>
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="150"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Style="{StaticResource RowLabel}" Text="自动保存间隔"/>
+                                <ComboBox Style="{StaticResource SettingsCombo}" x:Name="AutoSaveDelayBox" Grid.Column="1" Width="220" HorizontalAlignment="Left" SelectionChanged="OnAutoSaveDelayChanged">
+                                    <ComboBoxItem Content="5 秒"/>
+                                    <ComboBoxItem Content="10 秒"/>
+                                    <ComboBoxItem Content="30 秒"/>
+                                </ComboBox>
+                            </Grid>
                         </StackPanel>
 
                         <!-- ════════ 1 外观设置 ════════ -->
@@ -367,38 +382,6 @@
                                 <TextBlock Style="{StaticResource RowLabel}" Text="护眼模式"/>
                                 <CheckBox x:Name="EyeCareBox" Grid.Column="1" Content="暖色调 / 降低蓝光" FontSize="12" VerticalAlignment="Center"
                                           Checked="OnEyeCareChanged" Unchecked="OnEyeCareChanged"/>
-                            </Grid>
-                            <Grid Margin="0,0,0,8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="150"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Style="{StaticResource RowLabel}" Text="PDF 默认缩放"/>
-                                <ComboBox Style="{StaticResource SettingsCombo}" x:Name="PdfZoomBox" Grid.Column="1" Width="220" HorizontalAlignment="Left" SelectionChanged="OnPdfZoomChanged">
-                                    <ComboBoxItem Content="适合宽度"/>
-                                    <ComboBoxItem Content="适合页面"/>
-                                    <ComboBoxItem Content="100% 实际大小"/>
-                                </ComboBox>
-                            </Grid>
-                            <Grid Margin="0,0,0,8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="150"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Style="{StaticResource RowLabel}" Text="PDF 翻页方式"/>
-                                <ComboBox Style="{StaticResource SettingsCombo}" x:Name="PdfPageModeBox" Grid.Column="1" Width="220" HorizontalAlignment="Left" SelectionChanged="OnPdfPageModeChanged">
-                                    <ComboBoxItem Content="滚动（连续）"/>
-                                    <ComboBoxItem Content="分页（逐页翻看）"/>
-                                </ComboBox>
-                            </Grid>
-                            <Grid Margin="0,0,0,8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="150"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Style="{StaticResource RowLabel}" Text="双击放大"/>
-                                <CheckBox x:Name="PdfDblClickBox" Grid.Column="1" Content="双击页面 100% ↔ 适合宽度 切换" FontSize="12" VerticalAlignment="Center"
-                                          Checked="OnPdfDblClickChanged" Unchecked="OnPdfDblClickChanged"/>
                             </Grid>
                         </StackPanel>
 

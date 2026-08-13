@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -30,14 +31,18 @@ namespace SeeMe
         }
 
 
-        private void OpenFileInternal(PanelState state, string path)
+        private async void OpenFileInternal(PanelState state, string path)
         {
             try
             {
+                // 编辑态切换文件：先把未落盘的改动保存到原文件，再打开新文件（自动保存计时未到也不丢字）
+                if (state.EditMode) await FlushPendingEditAsync(state);
                 state.CurrentFile = Path.GetFullPath(path);
                 state.FileDir = Path.GetDirectoryName(state.CurrentFile);
                 state.TitleText.Text = Path.GetFileName(state.CurrentFile);
                 state.TitleText.ToolTip = Path.GetDirectoryName(state.CurrentFile) ?? "";
+                state.EditMode = false; // 切换文件即退出编辑态（回到预览）
+                UpdateEditButtonVisibility();
                 UpdateInfoPanel(state);
                 // 取消之前的加载，避免异步竞争
                 _ = ReloadFileAsync(state, true, state.ResetCts());
@@ -51,6 +56,313 @@ namespace SeeMe
             {
                 StatusText.Text = "打开失败: " + ex.Message;
                 LogErr("Open file: " + ex);
+            }
+        }
+
+        // ═══════════════ 内联编辑（文本类 + docx pandoc 回写） ═══════════════
+
+        private static readonly HashSet<string> EditableTextExts = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ".md", ".markdown", ".txt", ".html", ".htm", ".css", ".js", ".mjs", ".json", ".csv"
+        };
+
+        private const long MaxEditBytes = 5L * 1024 * 1024; // 编辑上限 5MB，避免超大文本卡死 textarea
+
+        /// <summary>可编辑文件：文本类扩展名 或 docx（docx 走 Markdown 编辑 + pandoc 回写）。</summary>
+        private static bool CanEditFile(string? path)
+        {
+            if (string.IsNullOrEmpty(path)) return false;
+            var ext = Path.GetExtension(path).ToLowerInvariant();
+            return EditableTextExts.Contains(ext) || ext == ".docx";
+        }
+
+        private void OnToggleEditL(object sender, RoutedEventArgs e) => ToggleEditMode(_app.Left);
+        private void OnToggleEditR(object sender, RoutedEventArgs e) => ToggleEditMode(_app.Right);
+
+        private void ToggleEditMode(PanelState? state)
+        {
+            if (state == null || state.WebView?.CoreWebView2 == null) return;
+            if (state.EditMode) { ExitEditMode(state); return; }
+            EnterEditMode(state);
+        }
+
+        private void EnterEditMode(PanelState state)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(state.CurrentFile) || !File.Exists(state.CurrentFile))
+                { StatusText.Text = "没有可编辑的文件"; return; }
+                var fi = new FileInfo(state.CurrentFile);
+                if (fi.Length > MaxEditBytes)
+                { StatusText.Text = "文件超过 5MB 编辑上限，请用外部编辑器"; return; }
+
+                string text;
+                if (Path.GetExtension(state.CurrentFile).ToLowerInvariant() == ".docx")
+                {
+                    if (string.IsNullOrEmpty(state.DocxMarkdown))
+                    { StatusText.Text = "文档尚未转换完成，请稍后再试"; return; }
+                    text = state.DocxMarkdown!;
+                    state.EditEncoding = 0;
+                }
+                else
+                {
+                    var bytes = File.ReadAllBytes(state.CurrentFile);
+                    state.EditEncoding = DetectTextEncoding(bytes);
+                    text = DecodeText(bytes, state.EditEncoding);
+                }
+
+                state.EditMode = true;
+                state.EditSource = text;
+                var isDark = _theme.Current == _theme.Dark;
+                var autoSave = AppSettings.Get(AppSettings.AutoSaveKey, true);
+                var autoDelay = AppSettings.Get(AppSettings.AutoSaveDelayKey, 10);
+                state.WebView.NavigateToString(BuildEditPage(isDark, text, Path.GetExtension(state.CurrentFile), autoSave, autoDelay));
+                StatusText.Text = autoSave
+                    ? $"编辑模式：停顿 {autoDelay} 秒自动保存，Ctrl+S 手动保存，再点「编辑」返回预览"
+                    : "编辑模式：Ctrl+S 保存，再点「编辑」返回预览";
+                LogInfo("Edit mode: " + Path.GetFileName(state.CurrentFile));
+            }
+            catch (Exception ex)
+            {
+                LogErr("Enter edit: " + ex);
+                StatusText.Text = "进入编辑失败: " + ex.Message;
+            }
+        }
+
+        private async void ExitEditMode(PanelState state)
+        {
+            // 自动保存的 10s 计时未到或用户提前退出：先把未落盘的改动写盘，再回预览
+            StatusText.Text = "已退出编辑，正在保存…";
+            await FlushPendingEditAsync(state);
+            state.EditMode = false;
+            StatusText.Text = "已退出编辑，正在刷新预览…";
+            _ = ReloadFileAsync(state, true, state.ResetCts());
+        }
+
+        private static string DecodeText(byte[] bytes, int enc) => enc switch
+        {
+            1 => Encoding.UTF8.GetString(bytes, 3, bytes.Length - 3),
+            2 => Encoding.Unicode.GetString(bytes, 2, bytes.Length - 2),
+            3 => Encoding.BigEndianUnicode.GetString(bytes, 2, bytes.Length - 2),
+            4 => Encoding.GetEncoding("GB18030").GetString(bytes),
+            _ => Encoding.UTF8.GetString(bytes)
+        };
+
+        private static int DetectTextEncoding(byte[] bytes)
+        {
+            if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) return 1;
+            if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) return 2;
+            if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF) return 3;
+            var asUtf8 = Encoding.UTF8.GetString(bytes);
+            if (asUtf8.IndexOf('\uFFFD') < 0) return 0;
+            return 4;
+        }
+
+        private static Encoding SaveEncoding(int enc) => enc switch
+        {
+            1 => new UTF8Encoding(true),
+            2 => Encoding.Unicode,
+            3 => Encoding.BigEndianUnicode,
+            4 => Encoding.GetEncoding("GB18030"),
+            _ => new UTF8Encoding(false)
+        };
+
+        /// <summary>编辑页：主题化 textarea + Ctrl+S 保存 + 输入停顿自动保存（间隔 5/10/30s，postMessage edit-save 回传宿主）。</summary>
+        private string BuildEditPage(bool isDark, string content, string ext, bool autoSave, int autoDelay)
+        {
+            var cls = isDark ? " class='dark'" : "";
+            var esc = System.Security.SecurityElement.Escape(content);
+            var extLabel = System.Security.SecurityElement.Escape(ext.TrimStart('.'));
+            var autoHint = autoSave ? $" · 停顿 {autoDelay}s 自动保存" : "";
+            var autoFlag = autoSave ? "true" : "false";
+            var autoDelayMs = autoDelay * 1000;
+            var nonce = RenderService.NewNonce();
+            return $@"<!DOCTYPE html>
+<html{cls}><head><meta charset='utf-8'/>
+<meta name='viewport' content='width=device-width,initial-scale=1'/>
+<meta name='referrer' content='no-referrer'/>
+<meta http-equiv='Content-Security-Policy' content=""default-src 'self' https://appassets.example; script-src 'nonce-{nonce}' https://appassets.example; style-src 'unsafe-inline';"">
+<style>
+{RenderService.ThemeCss()}
+  * {{ margin:0; padding:0; box-sizing:border-box; }}
+  html,body {{ width:100%; height:100vh; background:var(--bg); color:var(--text); }}
+  #bar {{ position:fixed; top:0; left:0; right:0; z-index:10; display:flex; align-items:center; gap:8px;
+    padding:6px 12px; background:var(--card); border-bottom:1px solid var(--border); font-size:11px; color:var(--secondary); }}
+  #bar b {{ color:var(--accent); }}
+  kbd {{ border:1px solid var(--border); border-radius:4px; padding:0 5px; font-size:10px; font-family:inherit; }}
+  #saveStatus {{ margin-left:auto; color:var(--accent); opacity:0; transition:opacity .3s; }}
+  #dirty {{ display:none; color:#e5484d; font-weight:600; }}
+  #ed {{ position:absolute; top:32px; left:0; right:0; bottom:0; width:100%; height:calc(100vh - 32px);
+    border:none; outline:none; resize:none; background:var(--bg); color:var(--text);
+    font-family:'Consolas','JetBrains Mono','Microsoft YaHei',monospace; font-size:13px; line-height:1.55;
+    padding:14px 18px 40px; tab-size:4; white-space:pre; overflow:auto; }}
+  ::-webkit-scrollbar {{ width:8px; height:8px; }}
+  ::-webkit-scrollbar-track {{ background:transparent; }}
+  ::-webkit-scrollbar-thumb {{ background:var(--border); border-radius:4px; }}
+</style>
+</head><body>
+<div id='bar'>✏️ 编辑 <b>{extLabel}</b> · <kbd>Ctrl</kbd>+<kbd>S</kbd> 保存<span id='autoHint'>{autoHint}</span> · 再点标题栏「编辑」返回预览<span id='dirty'>● 未保存</span><span id='saveStatus'></span></div>
+<textarea id='ed' spellcheck='false' autofocus>{esc}</textarea>
+<script nonce='{nonce}'>
+(function(){{
+  var ed = document.getElementById('ed');
+  var st = document.getElementById('saveStatus');
+  var dirty = document.getElementById('dirty');
+  var autoSave = {autoFlag};
+  var autoDelayMs = {autoDelayMs}; // 可被宿主 __setAutoSave 实时更新（设置改动即时生效）
+  var timer = null, flashTimer = null;
+  var lastSaved = ed.value; // 最近一次已提交保存的内容快照，用于判断是否有未落盘改动
+  // 顶栏自动保存提示文本：开关/间隔变更时实时刷新，不重建页面不丢内容
+  function updateAutoHint(){{
+    var h = document.getElementById('autoHint');
+    h.textContent = autoSave ? ' · 停顿 ' + Math.round(autoDelayMs / 1000) + 's 自动保存' : '';
+  }}
+  window.__setAutoSave = function(enabled, delayMs){{
+    autoSave = !!enabled;
+    if(delayMs > 0) autoDelayMs = delayMs;
+    updateAutoHint();
+  }};
+  // 未保存指示：内容与已落盘快照不一致时亮起「● 未保存」，落盘后熄灭
+  function updateDirty(){{
+    dirty.style.display = (ed.value !== lastSaved) ? 'inline' : 'none';
+  }}
+  function flash(msg){{
+    st.textContent = msg; st.style.opacity = '1';
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(function(){{ st.style.opacity = '0'; }}, 2000);
+  }}
+  function doSave(){{
+    lastSaved = ed.value;
+    updateDirty();
+    try {{ window.chrome.webview.postMessage(JSON.stringify({{kind:'edit-save', text: ed.value}})); }} catch(err){{}}
+  }}
+  // 自动保存：每次 input 重置计时，停止输入 autoDelayMs 毫秒后自动落盘
+  function armAuto(){{
+    if(!autoSave) return;
+    clearTimeout(timer);
+    timer = setTimeout(function(){{ timer = null; doSave(); flash('✓ 已自动保存'); }}, autoDelayMs);
+  }}
+  ed.addEventListener('input', function(){{ updateDirty(); armAuto(); }});
+  ed.addEventListener('keydown', function(e){{
+    if((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')){{
+      e.preventDefault();
+      clearTimeout(timer);
+      doSave();
+      flash('✓ 已保存');
+    }}
+  }});
+  // 切页/关闭兜底：未落盘的改动一并回传宿主保存，避免退出编辑丢字
+  window.addEventListener('beforeunload', function(){{
+    if(ed.value !== lastSaved){{
+      try {{ window.chrome.webview.postMessage(JSON.stringify({{kind:'edit-save', text: ed.value}})); }} catch(err){{}}
+    }}
+  }});
+  ed.focus();
+}})();
+</script>
+</body></html>";
+        }
+
+        private async Task SaveEditAsync(PanelState state, string text)
+        {
+            if (!state.EditMode) return;
+            if (string.IsNullOrEmpty(state.CurrentFile)) return;
+            state.EditSource = text ?? "";
+            var name = Path.GetFileName(state.CurrentFile);
+            try
+            {
+                if (Path.GetExtension(state.CurrentFile).ToLowerInvariant() == ".docx")
+                    await SaveEditAsDocxAsync(state, state.EditSource);
+                else
+                    SaveEditAsText(state, state.EditSource);
+                StatusText.Text = "已保存: " + name;
+                LogInfo("Edit saved: " + name);
+            }
+            catch (Exception ex)
+            {
+                LogErr("Edit save: " + ex);
+                StatusText.Text = "保存失败: " + ex.Message;
+            }
+        }
+
+        /// <summary>编辑页 Ctrl+S / 自动保存消息入口（async void 桥接）。</summary>
+        private async void SaveEdit(PanelState state, string text) => await SaveEditAsync(state, text);
+
+        /// <summary>
+        /// 退出编辑/切换文件前把未落盘的改动写盘：自动保存的 10s 计时未到或用户提前退出时，
+        /// 从编辑页读取最新内容，与上次已保存内容不一致才落盘（避免无谓写入触发刷新）。
+        /// </summary>
+        private async Task FlushPendingEditAsync(PanelState state)
+        {
+            if (!state.EditMode) return;
+            if (state.WebView?.CoreWebView2 == null) return;
+            if (string.IsNullOrEmpty(state.CurrentFile)) return;
+            try
+            {
+                var raw = await state.WebView.CoreWebView2.ExecuteScriptAsync(
+                    "document.getElementById('ed') ? JSON.stringify(document.getElementById('ed').value) : ''");
+                if (string.IsNullOrEmpty(raw)) return;
+                var text = System.Text.Json.JsonSerializer.Deserialize<string>(raw);
+                if (text == null || text == state.EditSource) return; // 无新改动，跳过写入
+                await SaveEditAsync(state, text);
+            }
+            catch (Exception ex) { LogErr("Flush edit: " + ex.Message); }
+        }
+
+        private void SaveEditAsText(PanelState state, string text)
+        {
+            File.WriteAllText(state.CurrentFile!, text, SaveEncoding(state.EditEncoding));
+            MarkLoaded(state); // 更新时间戳/大小，让内容感知防抖与后续刷新正确
+        }
+
+        /// <summary>docx 保存：编辑的 Markdown 经 pandoc 回写原 docx（临时文件 + 原子替换 + .bak 备份）。</summary>
+        private async Task SaveEditAsDocxAsync(PanelState state, string text)
+        {
+            var dir = Path.GetDirectoryName(state.CurrentFile) ?? ".";
+            var name = Path.GetFileName(state.CurrentFile);
+            var guid = Guid.NewGuid().ToString("N");
+            var tempMd = Path.Combine(dir, "." + name + ".seeme-" + guid + ".md");
+            var tempDocx = Path.Combine(dir, "." + name + ".seeme-" + guid + ".docx");
+            var backup = Path.Combine(dir, name + ".bak");
+            try
+            {
+                File.WriteAllText(tempMd, text, new UTF8Encoding(false));
+                var (ok, msg) = await _pandoc.ExportAsync(tempMd, tempDocx, "docx");
+                if (!ok)
+                {
+                    StatusText.Text = "docx 回写失败: " + msg;
+                    LogErr("AnyDoc docx write-back: " + msg);
+                    return;
+                }
+                var tmp = new FileInfo(tempDocx);
+                if (!tmp.Exists || tmp.Length == 0)
+                {
+                    StatusText.Text = "docx 回写失败: pandoc 输出为空";
+                    return;
+                }
+                // 原子替换 + 自动 .bak 备份：转换成功才动原文件，失败绝不破坏原 docx。
+                // 暂停两侧 watcher：File.Replace 的改名/备份事件会把面板 CurrentFile 误指到 .bak（
+                // 曾观察到 Reload cancelled (md) 泄漏），暂停期间保存不触发任何误刷新。
+                var wl = _app.Left?.Watcher;
+                var wr = _app.Right?.Watcher;
+                try
+                {
+                    if (wl != null) wl.EnableRaisingEvents = false;
+                    if (wr != null) wr.EnableRaisingEvents = false;
+                    File.Replace(tempDocx, state.CurrentFile!, backup);
+                }
+                finally
+                {
+                    if (wl != null) wl.EnableRaisingEvents = true;
+                    if (wr != null) wr.EnableRaisingEvents = true;
+                }
+                state.DocxMarkdown = text; // 保留最新内容，再次进入编辑不回退
+                MarkLoaded(state);
+            }
+            finally
+            {
+                try { if (File.Exists(tempMd)) File.Delete(tempMd); } catch { }
+                try { if (File.Exists(tempDocx)) File.Delete(tempDocx); } catch { }
             }
         }
 
@@ -120,6 +432,8 @@ namespace SeeMe
             {
                 if (string.IsNullOrEmpty(keyword)) { RefreshRecentFilesList(); return; }
                 var kw = keyword.ToLowerInvariant();
+                // pdfStats: [0]=扫描版 PDF（无文本层） [1]=未提取文本的 PDF
+                var pdfStats = new int[2];
                 var hits = await Task.Run(() =>
                 {
                     var results = new List<string>();
@@ -128,6 +442,19 @@ namespace SeeMe
                         if (string.IsNullOrEmpty(p) || !File.Exists(p)) continue;
                         try
                         {
+                            if (FileTypes.IsPdf(Path.GetExtension(p)))
+                            {
+                                // PDF：只搜索已提取的文本层缓存（打开过一次即提取落盘）
+                                if (PdfTextCache.TryRead(p, out var pdfText, out var hasText))
+                                {
+                                    if (hasText && !string.IsNullOrEmpty(pdfText)
+                                        && pdfText.ToLowerInvariant().Contains(kw))
+                                        results.Add(p);
+                                    else if (!hasText) pdfStats[0]++;
+                                }
+                                else pdfStats[1]++;
+                                continue;
+                            }
                             var fi = new FileInfo(p);
                             if (fi.Length > 256 * 1024) continue; // 限量
                             var content = File.ReadAllText(p);
@@ -150,7 +477,11 @@ namespace SeeMe
                 }).ToList();
                 // Tag 必须与显示顺序一致，否则 GetSelectedRecentPath 按索引取路径会错位
                 RecentFilesList.Tag = ordered;
-                StatusText.Text = hits.Count > 0 ? $"内容搜索：找到 {hits.Count} 个文件" : "内容搜索：无匹配";
+                var notes = new List<string>();
+                if (pdfStats[1] > 0) notes.Add($"{pdfStats[1]} 个 PDF 未提取（打开一次后可搜索）");
+                if (pdfStats[0] > 0) notes.Add($"{pdfStats[0]} 个扫描版 PDF 无文本层");
+                var pdfNote = notes.Count > 0 ? "；" + string.Join("；", notes) : "";
+                StatusText.Text = (hits.Count > 0 ? $"内容搜索：找到 {hits.Count} 个文件" : "内容搜索：无匹配") + pdfNote;
             }
             catch (Exception ex) { LogErr("RefreshByContent: " + ex.Message); }
         }
@@ -526,8 +857,13 @@ namespace SeeMe
                     return ext switch
                     {
                         ".pdf" => header[0] == 0x25 && header[1] == 0x50 && header[2] == 0x44 && header[3] == 0x46,  // %PDF
-                        ".xlsx" or ".xls" or ".pptx" or ".docx" => header[0] == 0x50 && header[1] == 0x4B && header[2] == 0x03 && header[3] == 0x04, // ZIP/PK
-                        _ => true // .md 等纯文本跳过
+                        ".docx" or ".docm" or ".xlsx" or ".xlsm" or ".pptx" or ".odt" or ".ods" or ".odp" or ".epub" =>
+                            header[0] == 0x50 && header[1] == 0x4B && header[2] == 0x03 && header[3] == 0x04, // ZIP/PK
+                        ".doc" or ".xls" or ".ppt" =>
+                            header[0] == 0xD0 && header[1] == 0xCF && header[2] == 0x11 && header[3] == 0xE0, // OLE2
+                        ".rtf" =>
+                            header[0] == 0x7B && header[1] == 0x5C && header[2] == 0x72 && header[3] == 0x74 && header[4] == 0x66, // {\rtf
+                        _ => true // .md / .csv 等纯文本跳过
                     };
                 }
                 catch { return false; }
@@ -544,7 +880,7 @@ namespace SeeMe
         {
             if (supportedFiles.Count == 0)
             {
-                StatusText.Text = "不支持的文件类型，仅支持 md/pdf/xlsx/pptx";
+                StatusText.Text = "不支持的文件类型，请拖入 md / pdf / Office / epub / csv 文件";
                 return;
             }
             var ignored = totalDropped >= 0 ? Math.Max(0, totalDropped - supportedFiles.Count) : 0;

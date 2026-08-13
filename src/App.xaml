@@ -79,6 +79,11 @@
             M12,10 A1.5,1.5 0 1,0 12,13 A1.5,1.5 0 1,0 12,10 Z
             M15.5,10 A1.5,1.5 0 1,0 15.5,13 A1.5,1.5 0 1,0 15.5,10 Z
         </Geometry>
+        <!-- 编辑：铅笔（md/txt/docx 内联编辑入口） -->
+        <Geometry x:Key="IconEdit">
+            M3.5,20.5 L7,19.5 L19.5,7 A2.1,2.1 0 0,0 16.5,4 L4,16.5 Z
+            M14,6 L18,10 M3.5,20.5 L7.5,16.5
+        </Geometry>
         <!-- 切换分栏 -->
         <Geometry x:Key="IconSplit">
             M4,5 H11 A1.5,1.5 0 0,1 12.5,6.5 V17.5 A1.5,1.5 0 0,1 11,19 H4
@@ -165,12 +170,14 @@
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Padding" Value="4"/>
+            <Setter Property="Height" Value="28"/>
             <Setter Property="Foreground" Value="{DynamicResource IconForegroundBrush}"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
+                        <!-- CornerRadius=999：hover 灰底为正圆（纯几何，颜色仍走 LightGrayBrush 主题资源） -->
                         <Border Background="{TemplateBinding Background}" 
-                                CornerRadius="4"
+                                CornerRadius="999"
                                 Padding="{TemplateBinding Padding}">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>

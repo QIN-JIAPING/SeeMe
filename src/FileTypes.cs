@@ -15,10 +15,12 @@ namespace SeeMe
             ".md", ".markdown", ".mkd", ".mdown"
         };
 
-        /// <summary>Office 文档扩展名（小写，含点）。</summary>
+        /// <summary>Office 文档扩展名（小写，含点）。含 anydoc-wasm 覆盖的 12 种格式及宏文档变体 docm/xlsm。</summary>
         public static readonly HashSet<string> Office = new(StringComparer.OrdinalIgnoreCase)
         {
-            ".docx", ".xlsx", ".xls", ".pptx"
+            ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt",
+            ".rtf", ".odt", ".ods", ".odp", ".epub", ".csv",
+            ".docm", ".xlsm"
         };
 
         /// <summary>PDF 扩展名。</summary>
@@ -28,7 +30,8 @@ namespace SeeMe
         public static readonly HashSet<string> All = new(StringComparer.OrdinalIgnoreCase)
         {
             ".md", ".markdown", ".mkd", ".mdown",
-            ".pdf", ".docx", ".xlsx", ".xls", ".pptx"
+            ".pdf", ".docx", ".doc", ".docm", ".xlsx", ".xls", ".xlsm", ".pptx", ".ppt",
+            ".rtf", ".odt", ".ods", ".odp", ".epub", ".csv"
         };
 
         /// <summary>是否为受支持的文件类型。</summary>
@@ -49,12 +52,13 @@ namespace SeeMe
 
         /// <summary>打开文件对话框的统一过滤器。</summary>
         public const string OpenFilter =
-            "支持的文件(*.md;*.markdown;*.mkd;*.mdown;*.pdf;*.xlsx;*.xls;*.pptx;*.docx)|*.md;*.markdown;*.mkd;*.mdown;*.pdf;*.xlsx;*.xls;*.pptx;*.docx|" +
+            "支持的文件(*.md;*.markdown;*.mkd;*.mdown;*.pdf;*.docx;*.doc;*.docm;*.xlsx;*.xls;*.xlsm;*.pptx;*.ppt;*.rtf;*.odt;*.ods;*.odp;*.epub;*.csv)|*.md;*.markdown;*.mkd;*.mdown;*.pdf;*.docx;*.doc;*.docm;*.xlsx;*.xls;*.xlsm;*.pptx;*.ppt;*.rtf;*.odt;*.ods;*.odp;*.epub;*.csv|" +
             "Markdown 文件 (*.md;*.markdown;*.mkd;*.mdown)|*.md;*.markdown;*.mkd;*.mdown|" +
             "PDF 文件 (*.pdf)|*.pdf|" +
-            "Excel 文件 (*.xlsx;*.xls)|*.xlsx;*.xls|" +
-            "PowerPoint 文件 (*.pptx)|*.pptx|" +
-            "Word 文件 (*.docx)|*.docx|" +
+            "Word 文件 (*.docx;*.doc;*.docm;*.rtf;*.odt)|*.docx;*.doc;*.docm;*.rtf;*.odt|" +
+            "Excel 文件 (*.xlsx;*.xls;*.xlsm;*.ods;*.csv)|*.xlsx;*.xls;*.xlsm;*.ods;*.csv|" +
+            "PowerPoint 文件 (*.pptx;*.ppt;*.odp)|*.pptx;*.ppt;*.odp|" +
+            "电子书 (*.epub)|*.epub|" +
             "所有文件(*.*)|*.*";
     }
 }
