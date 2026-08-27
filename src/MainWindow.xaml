@@ -444,6 +444,16 @@
                                        VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
                             <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                                 <StackPanel x:Name="TitleBarActionsL" Orientation="Horizontal">
+                                    <Button x:Name="AnnBtnL" Style="{StaticResource IconBtn}"
+                                            ToolTip="高亮笔（选中文本添加标注）" Click="OnToggleAnnL"
+                                            Margin="0,0,4,0">
+                                        <Path Data="{StaticResource IconHighlight}"
+                                              Width="16" Height="16" Stretch="Uniform"
+                                              Fill="Transparent"
+                                              Stroke="{DynamicResource IconForegroundBrush}"
+                                              StrokeThickness="1.8"
+                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+                                    </Button>
                                     <Button x:Name="EditBtnL" Style="{StaticResource IconBtn}"
                                             ToolTip="编辑 (Ctrl+S 保存)" Click="OnToggleEditL"
                                             Margin="0,0,4,0" Visibility="Collapsed">
@@ -530,6 +540,16 @@
                                        VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
                             <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                                 <StackPanel x:Name="TitleBarActionsR" Orientation="Horizontal">
+                                    <Button x:Name="AnnBtnR" Style="{StaticResource IconBtn}"
+                                            ToolTip="高亮笔（选中文本添加标注）" Click="OnToggleAnnR"
+                                            Margin="0,0,4,0">
+                                        <Path Data="{StaticResource IconHighlight}"
+                                              Width="16" Height="16" Stretch="Uniform"
+                                              Fill="Transparent"
+                                              Stroke="{DynamicResource IconForegroundBrush}"
+                                              StrokeThickness="1.8"
+                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+                                    </Button>
                                     <Button x:Name="EditBtnR" Style="{StaticResource IconBtn}"
                                             ToolTip="编辑 (Ctrl+S 保存)" Click="OnToggleEditR"
                                             Margin="0,0,4,0" Visibility="Collapsed">
@@ -614,6 +634,11 @@
                         <Button x:Name="ImgExportBtn" Style="{StaticResource StatusBtn}" Content="导出图片" FontSize="10"
                                 Margin="0,0,6,0" Click="OnExportImage"
                                 ToolTip="将当前预览截图保存为 PNG"/>
+                        <Button x:Name="NotesToggleBtn" Style="{StaticResource StatusBtn}" Content="笔记" FontSize="10"
+                                Margin="0,0,6,0" Click="OnToggleNotesPanel"
+                                ToolTip="打开/关闭笔记面板（列出当前文件标注，可添加笔记并导出）"/>
+                        <Button x:Name="PrintBtn" Style="{StaticResource StatusBtn}" Content="打印" FontSize="10"
+                                Margin="0,0,6,0" Click="OnPrint" ToolTip="打印当前文档 (Ctrl+P)"/>
                         <Button x:Name="InfoPanelToggleBtn" Style="{StaticResource StatusBtn}" FontSize="10"
                                 Margin="0,0,0,0" Click="OnToggleInfoPanel" ToolTip="隐藏信息面板">
                             <StackPanel Orientation="Horizontal">
@@ -884,6 +909,104 @@
                 </StackPanel>
                 </ScrollViewer>
 
+            </Grid>
+        </Border>
+
+        <!-- ═══════════════ 右侧笔记面板（与信息面板互斥：显示笔记时隐藏信息面板） ═══════════════ -->
+        <Border x:Name="NotesPanel" Grid.Column="2" Visibility="Collapsed"
+                Background="{DynamicResource CardBackgroundBrush}"
+                CornerRadius="{DynamicResource PanelRadius}"
+                Margin="4,8,6,8"
+                Effect="{DynamicResource SidebarShadow}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <!-- 标题 -->
+                <Grid Grid.Row="0" Margin="8,14,8,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="📝 笔记" FontSize="13" FontWeight="Bold"
+                               Foreground="{DynamicResource TextPrimaryBrush}"
+                               VerticalAlignment="Center"/>
+                    <Button Grid.Column="1" Style="{StaticResource IconBtn}"
+                            Margin="8,0,0,0" VerticalAlignment="Center"
+                            Click="OnCloseNotesPanel" ToolTip="关闭笔记面板">
+                        <Path Data="{StaticResource IconClose}"
+                              Width="16" Height="16" Stretch="Uniform"
+                              Fill="Transparent"
+                              Stroke="{DynamicResource IconForegroundBrush}"
+                              StrokeThickness="1.8"
+                              StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+                    </Button>
+                </Grid>
+
+                <!-- 标注计数 -->
+                <TextBlock Grid.Row="1" x:Name="NotesCountText" Text="暂无标注" FontSize="10"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
+                           Margin="14,4,14,0"/>
+
+                <!-- 笔记列表 -->
+                <Border Grid.Row="2" Margin="8,8,8,0"
+                        Background="{DynamicResource InputBgBrush}"
+                        CornerRadius="{DynamicResource CardRadius}">
+                    <ListBox x:Name="NotesList" FontSize="11"
+                             Background="Transparent" BorderThickness="0"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             SelectionChanged="OnNotesListSelectionChanged"
+                             ItemContainerStyle="{StaticResource SidebarItem}">
+                        <ListBox.Template>
+                            <ControlTemplate TargetType="ListBox">
+                                <Border Background="{TemplateBinding Background}"
+                                        BorderBrush="{TemplateBinding BorderBrush}"
+                                        BorderThickness="{TemplateBinding BorderThickness}">
+                                    <ScrollViewer Style="{DynamicResource ThemedScrollViewer}"
+                                                  Focusable="False"
+                                                  HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}"
+                                                  VerticalScrollBarVisibility="{TemplateBinding ScrollViewer.VerticalScrollBarVisibility}">
+                                        <ItemsPresenter/>
+                                    </ScrollViewer>
+                                </Border>
+                            </ControlTemplate>
+                        </ListBox.Template>
+                    </ListBox>
+                </Border>
+
+                <!-- 笔记编辑 + 操作按钮 -->
+                <StackPanel Grid.Row="3" Margin="8,8,8,10">
+                    <TextBlock Text="笔记" FontSize="10" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextSecondaryBrush}" Margin="2,0,0,2"/>
+                    <Grid>
+                        <TextBox x:Name="NotesNoteBox" FontSize="11" Height="64"
+                                 AcceptsReturn="True" TextWrapping="Wrap"
+                                 VerticalScrollBarVisibility="Auto"
+                                 Background="{DynamicResource InputBgBrush}"
+                                 Foreground="{DynamicResource TextBodyBrush}"
+                                 CaretBrush="{DynamicResource TextBodyBrush}"
+                                 SelectionBrush="{DynamicResource AccentBrush}"
+                                 BorderThickness="0" Padding="6,4"
+                                 TextChanged="OnNotesNoteBoxChanged"/>
+                        <TextBlock x:Name="NotesNoteHint" Text="输入笔记内容，点「添加」新建；选中已有笔记可直接修改（自动保存）" FontSize="10"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   IsHitTestVisible="False" VerticalAlignment="Top"
+                                   Margin="8,7,8,0" TextWrapping="Wrap"/>
+                    </Grid>
+                    <UniformGrid Columns="3" Margin="0,6,0,0">
+                        <Button Style="{StaticResource ChipBtn}" FontSize="10" Padding="4,4"
+                                Margin="0,0,3,0" Click="OnNotesAddNote" ToolTip="未选中时新建笔记，选中时保存修改">添加</Button>
+                        <Button Style="{StaticResource ChipBtn}" FontSize="10" Padding="4,4"
+                                Margin="3,0,3,0" Click="OnNotesClearFile" ToolTip="清除当前文件全部笔记">清除</Button>
+                        <Button Style="{StaticResource ChipBtn}" FontSize="10" Padding="4,4"
+                                Margin="3,0,0,0" Click="OnNotesExport" ToolTip="导出当前文件笔记为 Markdown">导出</Button>
+                    </UniformGrid>
+                </StackPanel>
             </Grid>
         </Border>
 

@@ -117,6 +117,7 @@ namespace SeeMe
                 var ver = typeof(SettingsDialog).Assembly.GetName().Version;
                 AboutVersion.Text = "SeeMe " + (ver?.ToString(3) ?? "1.0.1") + " · 多格式文档查看器";
                 RefreshCacheInfo();
+                RefreshAssocStatus();
             }
             catch (Exception ex)
             {
@@ -299,6 +300,62 @@ namespace SeeMe
             if (_loading || HistorySizeBox.SelectedIndex < 0) return;
             var n = HistorySizeBox.SelectedIndex switch { 0 => 10, 2 => 20, 3 => 50, _ => 15 };
             _owner.ApplyHistorySize(n);
+        }
+
+        // ──────────────── 文件关联 ────────────────
+
+        /// <summary>刷新关联状态文本（Markdown 默认查看器 + 右键菜单两项）。</summary>
+        private void RefreshAssocStatus()
+        {
+            if (AssocStatus == null) return;
+            var parts = new List<string>
+            {
+                "Markdown 默认查看器：" + (FileAssoc.IsMdDefault() ? "已设置" : "未设置"),
+                "右键菜单：" + (FileAssoc.IsContextMenuRegistered() ? "已注册" : "未注册")
+            };
+            AssocStatus.Text = string.Join("　·　", parts);
+        }
+
+        private void OnAssocSetMd(object sender, RoutedEventArgs e)
+        {
+            var err = FileAssoc.RegisterMdDefault();
+            RefreshAssocStatus();
+            if (err != null)
+            {
+                MessageBox.Show(this, "设置失败：" + err, "SeeMe 文件关联",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            else
+            {
+                MessageBox.Show(this,
+                    "已将 .md 的默认打开方式设为 SeeMe。\n\n若系统默认应用仍指向其他程序，请在「设置 → 默认应用 → 按文件类型指定默认应用」中选择 SeeMe。",
+                    "SeeMe 文件关联", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+        }
+
+        private void OnAssocSetMenu(object sender, RoutedEventArgs e)
+        {
+            var err = FileAssoc.RegisterContextMenu();
+            RefreshAssocStatus();
+            if (err != null)
+            {
+                MessageBox.Show(this, "注册失败：" + err, "SeeMe 文件关联",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            else
+            {
+                MessageBox.Show(this,
+                    "已在资源管理器右键菜单注册「用 SeeMe 打开」。\n\n对 SeeMe 支持的所有格式（md / docx / xlsx / pptx / pdf / epub…）右键即可看到。",
+                    "SeeMe 文件关联", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+        }
+
+        private void OnAssocClear(object sender, RoutedEventArgs e)
+        {
+            FileAssoc.UnregisterAll();
+            RefreshAssocStatus();
+            MessageBox.Show(this, "已取消全部文件关联（.md 关联仅在仍指向 SeeMe 时移除）。",
+                "SeeMe 文件关联", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         // ──────────────── 外观 ────────────────

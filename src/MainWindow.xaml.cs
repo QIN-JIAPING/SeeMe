@@ -33,6 +33,8 @@ namespace SeeMe
         private IThemeManager _theme = null!;
         private PandocExportService _pandoc = null!;
         private IBookmarkStore _bookmarks = null!;
+        private IHighlightStore _highlights = null!;
+        private INoteStore _notes = null!;
         private string _searchFilter = "";
         /// <summary>用户自定义 CSS 文件路径（null=未启用）。读取失败时回退空。</summary>
         private string? _customCssPath;
@@ -530,6 +532,12 @@ namespace SeeMe
             _bookmarks = BookmarkStore.Load();
             _bookmarks.Changed += RefreshRecentFilesList;
 
+            _highlights = HighlightStore.Load();
+            _render.HighlightStore = _highlights;
+
+            _notes = NoteStore.Load();
+            _notes.Changed += RefreshNotesPanel;
+
             // 先设置 WebView 默认背景避免闪白（跟随主题画布色）
             var initBg = ThemeWebViewBg(_theme.Current == _theme.Dark);
             WebViewL.DefaultBackgroundColor = initBg;
@@ -639,8 +647,8 @@ window.addEventListener('drop',function(e){
 
             // 导航完成后补推一次主题：任何页面（含错误/加载/占位页）加载完都必然收到当前主题，
             // 即使切换发生在导航进行中，也不会出现"外壳变了 body 没变"的时序窗口。
-            WebViewL.NavigationCompleted += (_, _) => { _ = PushThemeAsync(_theme.Current == _theme.Dark); ApplyPanelZoom(_app.Left); };
-            WebViewR.NavigationCompleted += (_, _) => { _ = PushThemeAsync(_theme.Current == _theme.Dark); ApplyPanelZoom(_app.Right); };
+            WebViewL.NavigationCompleted += (_, _) => { _ = PushThemeAsync(_theme.Current == _theme.Dark); ApplyPanelZoom(_app.Left); ApplyAnnMode(_app.Left); SyncAnnBtns(); };
+            WebViewR.NavigationCompleted += (_, _) => { _ = PushThemeAsync(_theme.Current == _theme.Dark); ApplyPanelZoom(_app.Right); ApplyAnnMode(_app.Right); SyncAnnBtns(); };
 
             // 面板宽度变化（窗口缩放/拖分隔条）时刷新标题栏按钮折叠状态
             WebViewL.SizeChanged += (_, _) => UpdateTitleBarOverflow();
@@ -743,6 +751,8 @@ window.addEventListener('drop',function(e){
             else
                 StatusText.Text = "Ctrl+O 打开 ？直接拖入 md/pdf/Office/epub/csv 文件 ？Ctrl+T 分栏";
             UpdateWindowTitle();
+            // 启动布局收尾：右栏无文件时不占空间（双栏灰色空区域防护）
+            UpdateSplitAutoHide();
         }
 
         private void OnWindowKeyDown(object sender, KeyEventArgs e)
@@ -794,6 +804,12 @@ window.addEventListener('drop',function(e){
             {
                 var tgt = _activePanel ?? _app.Left;
                 if (tgt != null) ShowFind(tgt);
+                e.Handled = true;
+            }
+            else if (ctrl && e.Key == Key.P)
+            {
+                // 打印：MD/Office/PDF 文本视图 → WebView2 系统打印对话框
+                PrintActivePanel();
                 e.Handled = true;
             }
             else if (ctrl && e.Key == Key.D0)
@@ -1137,6 +1153,21 @@ window.addEventListener('drop',function(e){
                     _activePanel = state;
                     UpdateActivePanelVisual();
                     ShowOpenFor(state);
+                }
+                else if (kind == "highlight-add" && root.TryGetProperty("id", out var annIdEl) && root.TryGetProperty("text", out var annTextEl))
+                {
+                    // 高亮笔：JS 已把选区包裹为 <mark>，这里写入 HighlightStore（按文件路径持久化）
+                    var id = annIdEl.GetString();
+                    var text = annTextEl.GetString();
+                    if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(text) || string.IsNullOrEmpty(state.CurrentFile)) return;
+                    var ctx = root.TryGetProperty("context", out var ctxEl) ? ctxEl.GetString() ?? "" : "";
+                    _highlights.Add(new HighlightItem { Id = id, File = state.CurrentFile, Text = text, Context = ctx });
+                }
+                else if (kind == "highlight-remove" && root.TryGetProperty("id", out var remIdEl))
+                {
+                    // 右键点击页面标注 → 删除（JS 已同步移除 mark）
+                    var id = remIdEl.GetString();
+                    if (!string.IsNullOrEmpty(id)) _highlights.Remove(id);
                 }
             }
             catch (Exception ex) { LogErr("Web msg parse: " + ex.Message + " | rawLen=" + (raw?.Length ?? -1)); }

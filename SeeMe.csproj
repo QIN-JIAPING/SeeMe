@@ -9,7 +9,7 @@
     <ApplicationIcon>src\app_icon.ico</ApplicationIcon>
     <AssemblyName>SeeMe</AssemblyName>
     <RootNamespace>SeeMe</RootNamespace>
-    <Version>1.0.2</Version>
+    <Version>1.0.3</Version>
     <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
     <LangVersion>latest</LangVersion>
     <ApplicationManifest>src\app.manifest</ApplicationManifest>

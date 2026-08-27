@@ -734,6 +734,11 @@ p { font-size:13px; color:var(--secondary); }
             var jsRestoreY = state.LastScrollY.ToString(System.Globalization.CultureInfo.InvariantCulture);
             var jsToken = System.Text.Json.JsonSerializer.Serialize(state.PdfOutlineToken ?? "");
             var nonce = RenderService.NewNonce();
+            // 高亮标注：PDF 页同样注入（页面加载时文本未生成匹配不到，buildDoc 完成后由 __seemeApplyAnn 重应用）
+            var annData = (_render.HighlightStore?.ForFile(state.CurrentFile ?? "") ?? Array.Empty<HighlightItem>())
+                .Select(i => new { i.Id, i.Text, i.Note }).ToList();
+            var annotationScript = RenderService.BuildAnnotationScript(
+                System.Text.Json.JsonSerializer.Serialize(annData));
             return $@"<!DOCTYPE html>
 <html{htmlClass}><head><meta charset='utf-8'/>
 <meta name='viewport' content='width=device-width,initial-scale=1'/>
@@ -773,6 +778,7 @@ function setTheme(dark){{var h=document.documentElement;if(dark)h.classList.add(
 <script nonce='{nonce}'>
 {PdfReadingScript}
 </script>
+<script nonce='{nonce}'>{annotationScript}</script>
 </body></html>";
         }
 
@@ -833,7 +839,7 @@ function setTheme(dark){{var h=document.documentElement;if(dark)h.classList.add(
   var totalTextChars = 0;
   var total = 0;
 
-  function buildDoc(doc) {
+    function buildDoc(doc) {
     total = doc.numPages;
     var cur = 0;
     function next() {
@@ -843,6 +849,10 @@ function setTheme(dark){{var h=document.documentElement;if(dark)h.classList.add(
         if (restoreY > 0) window.scrollTo(0, restoreY);
         dbg('done: pages=' + total + ' textChars=' + totalTextChars);
         buildOutline(doc);
+        // 全部页面渲染完成后再应用高亮标注（标注脚本加载时 PDF 文本尚未生成）
+        if (window.__seemeAnn && window.__seemeApplyAnn) {
+          window.__seemeApplyAnn(window.__seemeAnn.items);
+        }
         return;
       }
       buildPage(doc, cur).then(next);

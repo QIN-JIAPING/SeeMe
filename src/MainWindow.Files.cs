@@ -51,6 +51,8 @@ namespace SeeMe
                 _app.History.Add(state.CurrentFile);
                 StatusText.Text = "已打开: " + Path.GetFileName(state.CurrentFile) + "（实时刷新中）";
                 LogInfo("Opened: " + Path.GetFileName(state.CurrentFile));
+                // 右栏文件变化后同步双栏占位（打开到右栏 → 双栏恢复；关闭 → 收折）
+                UpdateSplitAutoHide();
             }
             catch (Exception ex)
             {
@@ -79,9 +81,13 @@ namespace SeeMe
         private void OnToggleEditL(object sender, RoutedEventArgs e) => ToggleEditMode(_app.Left);
         private void OnToggleEditR(object sender, RoutedEventArgs e) => ToggleEditMode(_app.Right);
 
+        /// <summary>编辑切换进行中标志：防止快速多次点击「编辑」导致 Exit/Enter 并发读写文件（曾致内容乱码）。</summary>
+        private bool _editBusy;
+
         private void ToggleEditMode(PanelState? state)
         {
             if (state == null || state.WebView?.CoreWebView2 == null) return;
+            if (_editBusy) { StatusText.Text = "正在保存编辑内容，请稍候…"; return; }
             if (state.EditMode) { ExitEditMode(state); return; }
             EnterEditMode(state);
         }
@@ -129,14 +135,26 @@ namespace SeeMe
             }
         }
 
-        private async void ExitEditMode(PanelState state)
+        private void ExitEditMode(PanelState state)
         {
-            // 自动保存的 10s 计时未到或用户提前退出：先把未落盘的改动写盘，再回预览
+            if (_editBusy) return;
+            _editBusy = true;
             StatusText.Text = "已退出编辑，正在保存…";
-            await FlushPendingEditAsync(state);
-            state.EditMode = false;
-            StatusText.Text = "已退出编辑，正在刷新预览…";
-            _ = ReloadFileAsync(state, true, state.ResetCts());
+            _ = ExitEditCoreAsync(state);
+        }
+
+        /// <summary>退出编辑核心：刷新未落盘改动 → 退出标记 → 刷新预览。串行执行，防止并发读写文件。</summary>
+        private async Task ExitEditCoreAsync(PanelState state)
+        {
+            try
+            {
+                await FlushPendingEditAsync(state);
+                state.EditMode = false;
+                StatusText.Text = "已退出编辑，正在刷新预览…";
+                _ = ReloadFileAsync(state, true, state.ResetCts());
+            }
+            catch (Exception ex) { LogErr("Exit edit: " + ex.Message); }
+            finally { _editBusy = false; }
         }
 
         private static string DecodeText(byte[] bytes, int enc) => enc switch
@@ -299,8 +317,11 @@ namespace SeeMe
             if (string.IsNullOrEmpty(state.CurrentFile)) return;
             try
             {
+                // 注意：不要用 JSON.stringify(value)——ExecuteScriptAsync 会把 JS 返回值再序列化一次，
+                // 双重序列化会把换行/引号转义成字面 \n / \"，写盘后文件内容被污染（多次编辑逐层叠加乱码）。
+                // 直接返回原始 value，由 ExecuteScriptAsync 序列化 + C# 反序列化还原原文。
                 var raw = await state.WebView.CoreWebView2.ExecuteScriptAsync(
-                    "document.getElementById('ed') ? JSON.stringify(document.getElementById('ed').value) : ''");
+                    "document.getElementById('ed') ? document.getElementById('ed').value : ''");
                 if (string.IsNullOrEmpty(raw)) return;
                 var text = System.Text.Json.JsonSerializer.Deserialize<string>(raw);
                 if (text == null || text == state.EditSource) return; // 无新改动，跳过写入
@@ -487,6 +508,8 @@ namespace SeeMe
         }
 
 
+        private System.Windows.Threading.DispatcherTimer? _searchDebounce;
+
         private void OnSearchFilter(object sender, System.Windows.Controls.TextChangedEventArgs e)
         {
             try
@@ -496,7 +519,21 @@ namespace SeeMe
                 if (SearchHint != null)
                     SearchHint.Visibility = string.IsNullOrEmpty(SearchBox.Text)
                         ? Visibility.Visible : Visibility.Collapsed;
-                RefreshRecentFilesList();
+                // 防抖：停顿 250ms 后才刷新列表，避免每键全量扫描历史
+                if (_searchDebounce == null)
+                {
+                    _searchDebounce = new System.Windows.Threading.DispatcherTimer
+                    {
+                        Interval = TimeSpan.FromMilliseconds(250)
+                    };
+                    _searchDebounce.Tick += (_, _) =>
+                    {
+                        _searchDebounce.Stop();
+                        try { RefreshRecentFilesList(); } catch { }
+                    };
+                }
+                _searchDebounce.Stop();
+                _searchDebounce.Start();
             }
             catch { }
         }

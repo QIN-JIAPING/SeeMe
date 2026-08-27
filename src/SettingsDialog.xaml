@@ -273,6 +273,19 @@
                                     <ComboBoxItem Content="30 秒"/>
                                 </ComboBox>
                             </Grid>
+                            <Separator Margin="0,10,0,12" Opacity="0.3"/>
+                            <TextBlock Style="{StaticResource RowLabel}" Text="文件关联" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                            <TextBlock x:Name="AssocStatus" Style="{StaticResource SubNote}" Margin="0,0,0,8"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <Button Content="设为 .md 默认查看器" Style="{StaticResource ChipBtn}" Padding="12,5"
+                                        FontSize="11" Click="OnAssocSetMd"/>
+                                <Button Content="注册右键菜单" Style="{StaticResource ChipBtn}" Padding="12,5"
+                                        FontSize="11" Margin="6,0,0,0" Click="OnAssocSetMenu"/>
+                                <Button Content="取消全部关联" Style="{StaticResource ChipBtn}" Padding="12,5"
+                                        FontSize="11" Margin="6,0,0,0" Click="OnAssocClear"/>
+                            </StackPanel>
+                            <TextBlock Style="{StaticResource SubNote}"
+                                       Text="写入 HKCU 注册表，无需管理员权限。若系统默认应用已被其他程序锁定，需在「设置 → 默认应用」中手动更改。"/>
                         </StackPanel>
 
                         <!-- ════════ 1 外观设置 ════════ -->
@@ -458,9 +471,6 @@
                                 <CheckBox x:Name="DevToolsBox" Grid.Column="1" Content="启用 F12 打开 DevTools（调试用）" FontSize="12"
                                           VerticalAlignment="Center" Checked="OnDevToolsChanged" Unchecked="OnDevToolsChanged"/>
                             </Grid>
-                            <Border Style="{StaticResource Placeholder}" Margin="0,0,0,12">
-                                <TextBlock Style="{StaticResource RowLabel}" Text="硬件加速 / 检查更新 · 即将支持" Opacity="0.5"/>
-                            </Border>
                             <TextBlock Style="{StaticResource RowLabel}" Text="数据目录" Margin="0,0,0,4"/>
                             <TextBox x:Name="DataDirBox" FontSize="11" IsReadOnly="True" Padding="8,6"
                                      Background="{DynamicResource InputBgBrush}" BorderThickness="0"

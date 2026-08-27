@@ -82,6 +82,8 @@ namespace SeeMe
             }
             UpdateActivePanelVisual();
             UpdateWindowTitle();
+            // 分栏状态变化后同步右栏占位（右栏无文件 → 不占空间，避免灰色空区域）
+            UpdateSplitAutoHide();
             // 分栏状态变化可能改变面板宽度，刷新标题栏按钮折叠状态
             Dispatcher.BeginInvoke(new Action(UpdateTitleBarOverflow));
         }
@@ -116,20 +118,22 @@ namespace SeeMe
             catch { }
         }
 
-        /// <summary>左标题栏 ⋯ 溢出菜单（窄面板时替代三个图标按钮）。</summary>
+        /// <summary>左标题栏 ⋯ 溢出菜单（窄面板时替代图标按钮）。</summary>
         private void OnTitleBarOverflowL(object sender, RoutedEventArgs e)
         {
             ShowTitleBarOverflowMenu(TitleBarOverflowL,
+                (_, _) => OnToggleAnnL(sender, e),
                 (_, _) => OnToggleEditL(sender, e),
                 (_, _) => OnExportL(sender, e),
                 (_, _) => OnOpenL(sender, e),
                 (_, _) => OnToggleSplit(sender, e));
         }
 
-        /// <summary>右标题栏 ⋯ 溢出菜单（窄面板时替代三个图标按钮）。</summary>
+        /// <summary>右标题栏 ⋯ 溢出菜单（窄面板时替代图标按钮）。</summary>
         private void OnTitleBarOverflowR(object sender, RoutedEventArgs e)
         {
             ShowTitleBarOverflowMenu(TitleBarOverflowR,
+                (_, _) => OnToggleAnnR(sender, e),
                 (_, _) => OnToggleEditR(sender, e),
                 (_, _) => OnExportR(sender, e),
                 (_, _) => OnOpenR(sender, e),
@@ -137,13 +141,13 @@ namespace SeeMe
         }
 
         /// <summary>
-        /// 弹出标题栏 ⋯ 溢出菜单（导出/打开/分栏）。Button.Click 事件内同步打开 ContextMenu
+        /// 弹出标题栏 ⋯ 溢出菜单（高亮笔/编辑/导出/打开/分栏）。Button.Click 事件内同步打开 ContextMenu
         /// 会因按钮持有鼠标捕获而立即关闭，故用 Dispatcher 延迟到捕获释放后再打开。
         /// </summary>
         private void ShowTitleBarOverflowMenu(Button anchor, params RoutedEventHandler[] handlers)
         {
             var menu = new ContextMenu();
-            string[] labels = { "编辑 (Ctrl+S)", "导出 (pandoc)", "打开文件", "切换分栏 (Ctrl+T)" };
+            string[] labels = { "高亮笔", "编辑 (Ctrl+S)", "导出 (pandoc)", "打开文件", "切换分栏 (Ctrl+T)" };
             for (int i = 0; i < labels.Length && i < handlers.Length; i++)
                 menu.Items.Add(BuildOverflowItem(labels[i], handlers[i]));
             menu.PlacementTarget = anchor;
@@ -417,13 +421,12 @@ namespace SeeMe
         /// </summary>
         private void SetInfoPanelVisibility(bool visible, bool silent = false)
         {
-            // WebView2 在中央列宽度突变（信息面板折叠/展开）时 resize 会长时间卡顿/黑屏：
-            // 切换期间临时隐藏两个 WebView 避免参与布局风暴，等布局稳定后再恢复渲染。
-            SetWebViewRender(false);
             if (visible)
             {
                 InfoPanel.Visibility = Visibility.Visible;
-                InfoPanelCol.Width = new GridLength(190);
+                // 信息面板与笔记面板互斥显示
+                if (NotesPanel != null) NotesPanel.Visibility = Visibility.Collapsed;
+                if (NotesToggleBtn != null) NotesToggleBtn.Background = Brushes.Transparent;
                 if (InfoPanelToggleIcon != null)
                     InfoPanelToggleIcon.Data = (Geometry)FindResource("IconChevronRight");
                 InfoPanelToggleBtn.ToolTip = "隐藏信息面板";
@@ -432,14 +435,50 @@ namespace SeeMe
             else
             {
                 InfoPanel.Visibility = Visibility.Collapsed;
-                InfoPanelCol.Width = new GridLength(0);
                 if (InfoPanelToggleIcon != null)
                     InfoPanelToggleIcon.Data = (Geometry)FindResource("IconChevronLeft");
                 InfoPanelToggleBtn.ToolTip = "显示信息面板";
                 if (!silent) StatusText.Text = "信息面板已隐藏，点击箭头可恢复";
             }
-            // 布局完成后恢复 WebView 渲染（Hidden 仍占布局空间，不影响列宽计算）
-            Dispatcher.BeginInvoke(new Action(() => SetWebViewRender(true)));
+            // 统一列宽：任一右面板可见 → 190，都隐藏 → 0（主内容区自动扩展占满，不留白）
+            // 注意：不再隐藏/恢复 WebView（Visibility 切换会重建 WebView2 渲染表面，
+            // 大文档恢复时灰屏几十秒）；WebView 全程可见，跟随列宽增量 resize。
+            UpdateRightPanelColWidth();
+            // 双栏自适应：右面板全关 + 右栏无文件 → 收掉右栏占位（避免大块灰色空区域）
+            UpdateSplitAutoHide();
+        }
+
+        /// <summary>
+        /// 双栏右栏占位自适应：右栏无文件时永远不占空间（无论面板是否打开、用户是否切过双栏），
+        /// 消除"右侧大块灰色空区域"；右栏有文件时恢复 IsSplitMode 双栏显示。
+        /// </summary>
+        private void UpdateSplitAutoHide()
+        {
+            if (SplitGrid == null || SplitGrid.ColumnDefinitions.Count < 3) return;
+            var rightHasFile = !string.IsNullOrEmpty(_app.Right?.CurrentFile);
+            var showRight = _app.IsSplitMode && rightHasFile;
+            if (SplitterControl != null)
+                SplitterControl.Visibility = showRight ? Visibility.Visible : Visibility.Collapsed;
+            if (RightPanel != null)
+                RightPanel.Visibility = showRight ? Visibility.Visible : Visibility.Collapsed;
+            SplitGrid.ColumnDefinitions[1].Width = new GridLength(showRight ? 5 : 0);
+            SplitGrid.ColumnDefinitions[2].Width = new GridLength(
+                showRight ? 1 : 0, showRight ? GridUnitType.Star : GridUnitType.Pixel);
+        }
+
+        /// <summary>
+        /// 统一右侧列宽：信息面板或笔记面板任一可见 → 190；都隐藏 → 0，
+        /// 主内容区（* 列）自动扩展占满剩余宽度，不留空白。
+        /// 带 240ms 平滑过渡动画（受「动画效果」设置控制），列宽从 190↔0 渐变无跳动；
+        /// WebView 全程可见，跟随列宽增量 resize（不做 Visibility 切换，避免渲染表面重建灰屏）。
+        /// </summary>
+        private void UpdateRightPanelColWidth()
+        {
+            if (InfoPanelCol == null) return;
+            var anyVisible = InfoPanel.Visibility == Visibility.Visible
+                || (NotesPanel != null && NotesPanel.Visibility == Visibility.Visible);
+            var animate = AppSettings.Get(AppSettings.AnimationsKey, true);
+            RightPanelCol.Apply(InfoPanelCol, anyVisible, animate);
         }
 
         private void OnToggleInfoPanel(object sender, RoutedEventArgs e)
@@ -496,14 +535,7 @@ namespace SeeMe
             TabOutlineBtn.FontWeight = FontWeights.SemiBold;
         }
 
-        /// <summary>临时禁用/恢复两个 WebView 的渲染，规避 WebView2 resize 卡顿。</summary>
-
-        private void SetWebViewRender(bool render)
-        {
-            try { if (WebViewL != null) WebViewL.Visibility = render ? Visibility.Visible : Visibility.Hidden; } catch { }
-            try { if (WebViewR != null) WebViewR.Visibility = render ? Visibility.Visible : Visibility.Hidden; } catch { }
-        }
-
+        /// <summary>临时禁用/恢复两个 WebView 的渲染（不再使用：Visibility 切换会重建 WebView2 渲染表面，大文档恢复灰屏）。</summary>
 
     }
 }

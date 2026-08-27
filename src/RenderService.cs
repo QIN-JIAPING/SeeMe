@@ -295,6 +295,9 @@ namespace SeeMe
         /// <summary>鐢? MainWindow 鍦ㄨ閰嶆湇鍔℃椂娉ㄥ叆锛屼緵鍐呴儴娓叉煋閫昏緫鏍煎紡鍖栨枃浠跺ぇ灏忋??</summary>
         public IFileConverter? Converter { get; set; }
 
+        /// <summary>鐢? MainWindow 娉ㄥ叆锛氶珮浜? storage锛屾牴鎹? state.CurrentFile 鏌ヨ鍑哄綋鍓嶆枃浠剁殑鏍囨敞鍦ㄦ父鏌撴椂娉ㄥ叆椤甸潰銆?</summary>
+        public IHighlightStore? HighlightStore { get; set; }
+
         /// <summary>鐢熸垚 :root锛堜寒锛?+ html.dark锛堟殫锛夊弻濂? CSS 鍙橀噺鍧楋紙鍞竴鏉ユ簮 ThemeColors锛夈??</summary>
         public static string ThemeCss() => ThemeColors.ThemeCss();
 
@@ -412,6 +415,92 @@ window.__seemeSearchPrev=function(){
 };";
 
         /// <summary>
+        /// 页内高亮标注脚本（md 与 Office 页共用）：选中文本 → &lt;mark&gt;，按文件持久化到 HighlightStore；
+        /// 加载时把存储的标注按文本匹配重新包裹；右键标注可删除；点击标注通知宿主聚焦笔记面板对应条目。
+        /// </summary>
+        public static string BuildAnnotationScript(string itemsJson)
+        {
+            const string s = @"
+// ═══ 选区高亮 + 笔记标注 ═══
+window.__seemeAnn = { mode:false, items:[] };
+window.__setAnnMode = function(on){ window.__seemeAnn.mode = !!on; if(document.body) document.body.classList.toggle('seeme-ann-active', on); };
+function __annPost(obj){ try{ window.chrome.webview.postMessage(JSON.stringify(obj)); }catch(e){} }
+window.__seemeApplyAnn = function(items){
+  var marks = document.querySelectorAll('mark.seeme-ann');
+  for(var i=marks.length-1;i>=0;i--){ var m=marks[i]; var t=document.createTextNode(m.textContent); if(m.parentNode) m.parentNode.replaceChild(t,m); }
+  window.__seemeAnn.items = items || [];
+  var list = window.__seemeAnn.items;
+  var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+  var nodes=[]; var n; while((n=walker.nextNode())) nodes.push(n);
+  // 每条标注独立在全部文本节点中找匹配（同段落多条标注都能恢复；之前按节点优先只恢复第一条）
+  for(var j=0;j<list.length;j++){
+    var it=list[j]; if(!it||!it.text) continue;
+    for(var k=0;k<nodes.length;k++){
+      var tn=nodes[k]; var p=tn.parentNode;
+      if(!p) continue;
+      var tag=(p.tagName||'').toUpperCase();
+      if(tag==='SCRIPT'||tag==='STYLE'||tag==='MARK'||tag==='CODE') continue;
+      if(p.closest){ if(p.closest('pre')||p.closest('code')||p.closest('.fm-card')) continue; }
+      var idx=tn.textContent.indexOf(it.text);
+      if(idx<0) continue;
+      try{
+        var range=document.createRange();
+        range.setStart(tn,idx); range.setEnd(tn,idx+it.text.length);
+        var mark=document.createElement('mark');
+        mark.className='seeme-ann'; mark.setAttribute('data-id',it.id);
+        if(it.note) mark.title=it.note;
+        range.surroundContents(mark);
+      }catch(e){}
+      break;
+    }
+  }
+};
+document.addEventListener('mouseup', function(e){
+  var ann=window.__seemeAnn; if(!ann.mode) return;
+  var sel=window.getSelection(); if(!sel||sel.isCollapsed) return;
+  var text=(sel.toString()||'').trim();
+  if(!text) return;
+  var node=sel.anchorNode;
+  if(node&&node.parentElement&&node.parentElement.closest){
+    var skip=node.parentElement.closest('pre')||node.parentElement.closest('code')||node.parentElement.closest('.fm-card')||node.parentElement.closest('mark.seeme-ann');
+    if(skip){ sel.removeAllRanges(); return; }
+  }
+  var range=sel.getRangeAt(0);
+  if(!range||range.collapsed){ sel.removeAllRanges(); return; }
+  try{
+    var mark=document.createElement('mark');
+    mark.className='seeme-ann';
+    var id='ann'+Date.now().toString(36)+Math.floor(Math.random()*1e6).toString(36);
+    mark.setAttribute('data-id',id);
+    range.surroundContents(mark);
+    var ctxEl=mark.closest('h1,h2,h3,h4,h5,h6,p,blockquote,li,td,th');
+    var ctx=ctxEl?ctxEl.textContent.trim():'';
+    if(ctx.length>160) ctx=ctx.substring(0,160)+'…';
+    __annPost({kind:'highlight-add',id:id,text:text,context:ctx});
+  }catch(err){}
+  sel.removeAllRanges();
+});
+document.addEventListener('contextmenu', function(e){
+  var t=e.target; var m=(t&&t.closest)?t.closest('mark.seeme-ann'):null;
+  if(!m) return;
+  e.preventDefault();
+  var id=m.getAttribute('data-id');
+  var txt=document.createTextNode(m.textContent);
+  if(m.parentNode) m.parentNode.replaceChild(txt,m);
+  __annPost({kind:'highlight-remove',id:id});
+});
+document.addEventListener('click', function(e){
+  var t=e.target; var m=(t&&t.closest)?t.closest('mark.seeme-ann'):null;
+  if(!m) return;
+  var id=m.getAttribute('data-id');
+  if(id) __annPost({kind:'highlight-click',id:id});
+});
+window.__seemeApplyAnn(__ANN_ITEMS__);
+";
+            return s.Replace("__ANN_ITEMS__", itemsJson ?? "[]");
+        }
+
+        /// <summary>
         /// 缁熶竴椤甸潰澶栧３锛氭墍鏈? NavigateToString 鐨勭畝鍗曢〉闈紙閿欒/鍔犺浇/鍗犱綅/鏂囦欢涓㈠け锛夐兘璧拌繖閲岋紝
         /// 淇濊瘉蹇呯劧鍖呭惈瀹屾暣鍙屽 CSS 鍙橀噺涓? setTheme锛屾潨缁?"鍒囨崲瀹屽叏鏃犳晥"鐨勯〉闈€??
         /// </summary>
@@ -505,6 +594,20 @@ section.footnotes li p {{ display:inline; }}
             // 锛堝弻鍑绘斁澶? lightbox锛夌殑瀹氫綅鍙傝?冧粠瑙嗗彛鍙樻垚鏁翠釜鏂囨。鐩掋?傛敼涓哄彧浣滅敤浜庡唴瀹瑰厓绱犮??
             if (EyeCare)
                 css += "\nbody > *:not(#seeme-ov) {{ filter:sepia(.22) saturate(.88) brightness(1.02); }}\nhtml.dark body > *:not(#seeme-ov) {{ filter:sepia(.18) saturate(.8) brightness(.96); }}\n";
+
+            // 高亮标注 mark 样式 + 高亮笔光标 + 打印样式（@media print：白底黑字、隐藏元信息卡）
+            css += @"
+mark.seeme-ann {{ background:#FDE68A; color:#1F2937; border-radius:2px; padding:1px 2px; cursor:pointer; }}
+html.dark mark.seeme-ann {{ background:#B45309; color:#FDE68A; }}
+body.seeme-ann-active {{ cursor:text; }}
+body.seeme-ann-active ::selection {{ background:#FDE68A; }}
+@media print {{
+  html, body {{ background:#fff !important; color:#000 !important; }}
+  body {{ padding:0 !important; }}
+  .fm-card {{ display:none !important; }}
+  mark.seeme-hl, mark.seeme-ann {{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }}
+}}
+";
 
             var scrollScript = $@"
 (function(){{
@@ -601,6 +704,11 @@ function setTheme(dark){{
             var remoteImg = state.AllowRemoteImages ? " https:" : "";
             var nonce = NewNonce();
 
+            // 高亮标注：按当前文件路径取存储的标注，随页面加载按文本重新包裹
+            var annData = (HighlightStore?.ForFile(state.CurrentFile ?? "") ?? Array.Empty<HighlightItem>())
+                .Select(i => new { i.Id, i.Text, i.Note }).ToList();
+            var annotationScript = BuildAnnotationScript(System.Text.Json.JsonSerializer.Serialize(annData));
+
             return $@"<!DOCTYPE html>
 <html{htmlClass}><head><meta charset='utf-8'/>
 <meta name='viewport' content='width=device-width,initial-scale=1'/>
@@ -629,6 +737,7 @@ function setTheme(dark){{
 <script src='{mermaidJsUrl}'></script>
 <script nonce='{nonce}'>{scrollScript}</script>
 <script nonce='{nonce}'>{SearchScript}</script>
+<script nonce='{nonce}'>{annotationScript}</script>
 </body></html>";
         }
 
@@ -701,11 +810,25 @@ html.dark .excel-table tr:hover td {{ background:rgba(255,255,255,.06); }}
 ::-webkit-scrollbar-track {{ background:transparent; }}
 ::-webkit-scrollbar-thumb {{ background:var(--border); border-radius:4px; }}
 ::-webkit-scrollbar-thumb:hover {{ background:var(--secondary); }}
+mark.seeme-ann {{ background:#FDE68A; color:#1F2937; border-radius:2px; padding:1px 2px; cursor:pointer; }}
+html.dark mark.seeme-ann {{ background:#B45309; color:#FDE68A; }}
+body.seeme-ann-active {{ cursor:text; }}
+body.seeme-ann-active ::selection {{ background:#FDE68A; }}
+@media print {{
+html, body {{ background:#fff !important; color:#000 !important; }}
+body {{ padding:0 !important; }}
+mark.seeme-hl, mark.seeme-ann {{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }}
+}}
 ";
-            var htmlClass = isDark ? " class='dark'" : "";
-            var nonce = NewNonce();
+        var htmlClass = isDark ? " class='dark'" : "";
+        var nonce = NewNonce();
 
-            return $@"<!DOCTYPE html>
+        // 高亮标注：按当前文件路径取存储的标注，随页面加载按文本重新包裹
+        var annData = (HighlightStore?.ForFile(state.CurrentFile ?? "") ?? Array.Empty<HighlightItem>())
+            .Select(i => new { i.Id, i.Text, i.Note }).ToList();
+        var annotationScript = BuildAnnotationScript(System.Text.Json.JsonSerializer.Serialize(annData));
+
+        return $@"<!DOCTYPE html>
 <html{htmlClass}>
 <head>
 <meta charset='utf-8'>
@@ -721,6 +844,7 @@ html.dark .excel-table tr:hover td {{ background:rgba(255,255,255,.06); }}
     {bodyHtml}
   </div>
 <script nonce='{nonce}'>{SearchScript}</script>
+<script nonce='{nonce}'>{annotationScript}</script>
 </body>
 </html>";
         }

@@ -43,6 +43,7 @@ namespace SeeMe
         public const string AutoSaveKey           = "autoSave";         // bool（编辑模式自动保存）
         public const string AutoSaveDelayKey      = "autoSaveDelay";    // int 秒（5 / 10 / 30）
         public const string RemoteImageAllowKey   = "remoteImageAllow"; // string[]（允许加载远程图片的文档路径）
+        public const string AnnModeKey            = "annMode";          // bool（高亮笔开关，重启/退出后保持）
 
         private static readonly Dictionary<string, JsonNode?> Cache = LoadAll();
 

@@ -46,6 +46,7 @@ namespace SeeMe
         MarkdownPipeline Pipeline { get; }
         IThemeManager? ThemeManager { get; set; }
         IFileConverter? Converter { get; set; }
+        IHighlightStore? HighlightStore { get; set; }
         string ProcessRelativePaths(string html, string? baseDir);
         string SanitizeLinkHrefs(string html);
         string WrapTables(string html);
@@ -81,5 +82,29 @@ namespace SeeMe
         bool Contains(string path);
         bool Toggle(string path);
         void Remove(string path);
+    }
+
+    /// <summary>高亮标注存储契约：按文件路径持久化选区高亮（重启后仍保留）。</summary>
+    public interface IHighlightStore
+    {
+        IReadOnlyList<HighlightItem> Items { get; }
+        event Action? Changed;
+        IReadOnlyList<HighlightItem> ForFile(string path);
+        void Add(HighlightItem item);
+        void Remove(string id);
+        void SetNote(string id, string note);
+        void ClearFile(string path);
+    }
+
+    /// <summary>用户笔记存储契约：用户自由输入的笔记，按文件路径持久化（与标注解耦）。</summary>
+    public interface INoteStore
+    {
+        IReadOnlyList<NoteItem> Items { get; }
+        event Action? Changed;
+        IReadOnlyList<NoteItem> ForFile(string path);
+        NoteItem Add(string file, string content);
+        void Update(string id, string content);
+        void Remove(string id);
+        void ClearFile(string path);
     }
 }
