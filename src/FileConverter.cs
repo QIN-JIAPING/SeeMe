@@ -25,9 +25,45 @@ namespace SeeMe
     /// </summary>
     public class FileConverter : IFileConverter
     {
-        private const int MaxRowsPerSheet = 5000;
-        private const int MaxSheets = 50;
-        private const int MaxPptSlides = 200;
+        /// <summary>
+        /// zip 炸弹预检：Office 容器是 zip，按中央目录声明的 entry 解压后大小累计，
+        /// 超过 Limits.MaxDecompressedBytes 拒绝解析（异常冒泡到渲染层转错误页）。
+        /// </summary>
+        private static void EnsureZipBudget(string filePath)
+        {
+            using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var zip = new System.IO.Compression.ZipArchive(fs, System.IO.Compression.ZipArchiveMode.Read);
+            long total = 0;
+            foreach (var entry in zip.Entries)
+            {
+                total += entry.Length;
+                if (total > Limits.MaxDecompressedBytes)
+                    throw new IOException($"文档解压后超过 {Limits.MaxDecompressedBytes / (1024 * 1024)}MB 上限（疑似 zip 炸弹），已拒绝解析");
+            }
+        }
+
+        /// <summary>XML/HTML 文本转义助手（SecurityElement.Escape 短别名，全文统一入口）。</summary>
+        private static string Esc(string? s) => System.Security.SecurityElement.Escape(s) ?? "";
+
+        /// <summary>
+        /// 容器包装样板（四个 *ToHtmlSync 共用唯一来源）：开容器 div → try/catch 执行 render
+        /// （异常转错误段落）→ 收尾闭合并返回 HTML。errPrefix 如 "转换 Excel"/"读取 PDF"。
+        /// </summary>
+        private static string WrapInContainer(string containerClass, string errPrefix, Action<StringBuilder> render)
+        {
+            var sb = new StringBuilder();
+            sb.Append($"<div class=\"{containerClass}\">");
+            try
+            {
+                render(sb);
+            }
+            catch (Exception ex)
+            {
+                sb.Append($"<p class=\"error-msg\">{errPrefix}失败：{Esc(ex.Message)}</p>");
+            }
+            sb.Append("</div>");
+            return sb.ToString();
+        }
 
         // ──────────────── Excel -> HTML ────────────────
 
@@ -37,22 +73,20 @@ namespace SeeMe
 
         private string ExcelToHtmlSync(string filePath)
         {
-            var sb = new StringBuilder();
-            sb.Append("<div class=\"excel-container\">");
-
-            try
+            return WrapInContainer("excel-container", "转换 Excel", sb =>
             {
+                EnsureZipBudget(filePath); // zip 炸弹预检
                 using var doc = SpreadsheetDocument.Open(filePath, false);
                 var wbPart = doc.WorkbookPart;
                 if (wbPart == null)
                 {
-                    sb.Append("<p class=\"error-msg\">无法读取工作簿结构</p></div>");
-                    return sb.ToString();
+                    sb.Append("<p class=\"error-msg\">无法读取工作簿结构</p>");
+                    return;
                 }
 
                 var sheets = wbPart.Workbook.Sheets?
                     .OfType<Sheet>()
-                    .Take(MaxSheets)
+                    .Take(Limits.MaxExcelSheets)
                     .ToList() ?? new List<Sheet>();
 
                 // 预构建共享字符串索引：sst.ElementAt(idx) 在 OpenXML 上是 O(n)/次，
@@ -71,13 +105,13 @@ namespace SeeMe
 
                 if (sheets.Count == 0)
                 {
-                    sb.Append("<p class=\"empty-msg\">未找到工作表</p></div>");
-                    return sb.ToString();
+                    sb.Append("<p class=\"empty-msg\">未找到工作表</p>");
+                    return;
                 }
 
                 foreach (var sheet in sheets)
                 {
-                    var sheetName = System.Security.SecurityElement.Escape(sheet.Name ?? "Sheet");
+                    var sheetName = Esc(sheet.Name ?? "Sheet");
                     sb.Append($"<h2 class=\"sheet-title\">📊 {sheetName}</h2>");
 
                     var wsPart = wbPart.GetPartById(sheet.Id!) as WorksheetPart;
@@ -94,7 +128,7 @@ namespace SeeMe
                         continue;
                     }
 
-                    var rows = sheetData.Elements<Row>().Take(MaxRowsPerSheet).ToList();
+                    var rows = sheetData.Elements<Row>().Take(Limits.MaxExcelRows).ToList();
                     if (rows.Count == 0)
                     {
                         sb.Append("<p class=\"empty-msg\">空工作表</p>");
@@ -137,7 +171,7 @@ namespace SeeMe
                             {
                                 var val = GetCellValue(cell, sharedStrings);
                                 var tag = (row.RowIndex?.Value ?? 0) == 1 ? "th" : "td";
-                                sb.Append($"<{tag}>{System.Security.SecurityElement.Escape(val)}</{tag}>");
+                                sb.Append($"<{tag}>{Esc(val)}</{tag}>");
                             }
                             else
                             {
@@ -157,14 +191,7 @@ namespace SeeMe
                 {
                     sb.Append($"<div class=\"file-info\">文件大小：{FormatSizeBytes(fi.Length)} ｜ 工作表数：{sheets.Count}</div>");
                 }
-            }
-            catch (Exception ex)
-            {
-                sb.Append($"<p class=\"error-msg\">转换 Excel 失败：{System.Security.SecurityElement.Escape(ex.Message)}</p>");
-            }
-
-            sb.Append("</div>");
-            return sb.ToString();
+            });
         }
 
         private string GetCellValue(Cell cell, List<string> sharedStrings)
@@ -219,28 +246,26 @@ namespace SeeMe
 
         private string PptToHtmlSync(string filePath)
         {
-            var sb = new StringBuilder();
-            sb.Append("<div class=\"ppt-container\">");
-
-            try
+            return WrapInContainer("ppt-container", "转换 PPT", sb =>
             {
+                EnsureZipBudget(filePath); // zip 炸弹预检
                 using var doc = PresentationDocument.Open(filePath, false);
                 var presPart = doc.PresentationPart;
                 if (presPart == null)
                 {
-                    sb.Append("<p class=\"error-msg\">无法读取演示文稿结构</p></div>");
-                    return sb.ToString();
+                    sb.Append("<p class=\"error-msg\">无法读取演示文稿结构</p>");
+                    return;
                 }
 
                 var slideIdList = presPart.Presentation.SlideIdList;
                 if (slideIdList == null)
                 {
-                    sb.Append("<p class=\"empty-msg\">未找到幻灯片</p></div>");
-                    return sb.ToString();
+                    sb.Append("<p class=\"empty-msg\">未找到幻灯片</p>");
+                    return;
                 }
 
                 var slideIds = slideIdList.OfType<P.SlideId>()
-                    .Take(MaxPptSlides)
+                    .Take(Limits.MaxPptSlides)
                     .ToList();
 
                 for (int i = 0; i < slideIds.Count; i++)
@@ -261,7 +286,7 @@ namespace SeeMe
                         var text = ExtractShapeText(shape);
                         if (!string.IsNullOrWhiteSpace(text))
                         {
-                            sb.Append($"<p class=\"ppt-text\">{System.Security.SecurityElement.Escape(text)}</p>");
+                            sb.Append($"<p class=\"ppt-text\">{Esc(text)}</p>");
                             hasContent = true;
                         }
                     }
@@ -271,14 +296,7 @@ namespace SeeMe
 
                     sb.Append("</div></div>");
                 }
-            }
-            catch (Exception ex)
-            {
-                sb.Append($"<p class=\"error-msg\">转换 PPT 失败：{System.Security.SecurityElement.Escape(ex.Message)}</p>");
-            }
-
-            sb.Append("</div>");
-            return sb.ToString();
+            });
         }
 
         private string ExtractShapeText(P.Shape shape)
@@ -297,10 +315,7 @@ namespace SeeMe
 
         private string PdfToHtmlSync(string filePath)
         {
-            var sb = new StringBuilder();
-            sb.Append("<div class=\"pdf-container\">");
-
-            try
+            return WrapInContainer("pdf-container", "读取 PDF", sb =>
             {
                 using var pdf = PdfDocument.Open(filePath);
                 var pageCount = pdf.NumberOfPages;
@@ -347,14 +362,7 @@ namespace SeeMe
 
                     sb.Append("</div></div>");
                 }
-            }
-            catch (Exception ex)
-            {
-                sb.Append($"<p class=\"error-msg\">读取 PDF 失败：{System.Security.SecurityElement.Escape(ex.Message)}</p>");
-            }
-
-            sb.Append("</div>");
-            return sb.ToString();
+            });
         }
 
         /// <summary>将一行字母转为 HTML，按水平间距决定空格/缩进（缩进阈值按平均字符宽度自适应）。</summary>
@@ -384,7 +392,7 @@ namespace SeeMe
             var line = text.ToString().TrimEnd();
             if (string.IsNullOrWhiteSpace(line)) return;
 
-            var escaped = System.Security.SecurityElement.Escape(line);
+            var escaped = Esc(line);
             var indent = firstLeft ?? 0;
 
             // 缩进较多 → 代码块。阈值按本行平均字符宽度自适应（约 4 个字符宽），
@@ -404,17 +412,15 @@ namespace SeeMe
 
         private string DocxToHtmlSync(string filePath)
         {
-            var sb = new StringBuilder();
-            sb.Append("<div class=\"docx-container\">");
-
-            try
+            return WrapInContainer("docx-container", "读取 Word", sb =>
             {
+                EnsureZipBudget(filePath); // zip 炸弹预检
                 using var doc = WordprocessingDocument.Open(filePath, false);
                 var body = doc.MainDocumentPart?.Document.Body;
                 if (body == null)
                 {
-                    sb.Append("<p class=\"empty-msg\">文档为空</p></div>");
-                    return sb.ToString();
+                    sb.Append("<p class=\"empty-msg\">文档为空</p>");
+                    return;
                 }
 
                 foreach (var elem in body.Elements())
@@ -429,7 +435,7 @@ namespace SeeMe
                         {
                             var text = string.Concat(run.Elements<DocumentFormat.OpenXml.Wordprocessing.Text>().Select(t => t.Text));
                             if (string.IsNullOrEmpty(text)) continue;
-                            text = System.Security.SecurityElement.Escape(text);
+                            text = Esc(text);
 
                             var isBold = run.RunProperties?.Bold != null;
                             var isItalic = run.RunProperties?.Italic != null;
@@ -469,21 +475,14 @@ namespace SeeMe
                             foreach (var cell in row.Elements<DocumentFormat.OpenXml.Wordprocessing.TableCell>())
                             {
                                 var cellText = string.Concat(cell.Descendants<DocumentFormat.OpenXml.Wordprocessing.Text>().Select(t => t.Text));
-                                sb.Append($"<td>{System.Security.SecurityElement.Escape(cellText)}</td>");
+                                sb.Append($"<td>{Esc(cellText)}</td>");
                             }
                             sb.Append("</tr>");
                         }
                         sb.Append("</table>");
                     }
                 }
-            }
-            catch (Exception ex)
-            {
-                sb.Append($"<p class=\"error-msg\">读取 Word 失败：{System.Security.SecurityElement.Escape(ex.Message)}</p>");
-            }
-
-            sb.Append("</div>");
-            return sb.ToString();
+            });
         }
 
         private string? GetParagraphStyleName(Paragraph para)

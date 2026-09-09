@@ -18,9 +18,20 @@ namespace SeeMe
     /// </summary>
     public static class PdfTextCache
     {
-        private static readonly string CacheDir = Path.Combine(
+        private static string DefaultCacheDir => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "SeeMe", "pdftext");
+
+        private static string? _cacheDirOverride;
+
+        /// <summary>实际生效的缓存目录（测试可覆盖）。</summary>
+        private static string CacheDir => _cacheDirOverride ?? DefaultCacheDir;
+
+        /// <summary>测试隔离：覆盖缓存目录（仅测试使用）。</summary>
+        public static void ResetForTest(string? cacheDir = null)
+        {
+            _cacheDirOverride = cacheDir;
+        }
 
         /// <summary>缓存最长保留天数，超过则启动时清理（防止磁盘无限增长）。</summary>
         private static readonly TimeSpan MaxCacheAge = TimeSpan.FromDays(30);
@@ -45,7 +56,7 @@ namespace SeeMe
                 if (!Directory.Exists(CacheDir)) Directory.CreateDirectory(CacheDir);
                 File.WriteAllText(BasePath(path) + ".txt", text ?? "");
             }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[SeeMe] PdfTextCache.Write: " + ex.Message); }
+            catch (Exception ex) { SeeMeLog.Info("PdfTextCache.Write", ex.Message); }
         }
 
         /// <summary>标记为扫描版（无文本层）。</summary>
@@ -56,7 +67,7 @@ namespace SeeMe
                 if (!Directory.Exists(CacheDir)) Directory.CreateDirectory(CacheDir);
                 File.WriteAllText(BasePath(path) + ".no", "");
             }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[SeeMe] PdfTextCache.WriteNoText: " + ex.Message); }
+            catch (Exception ex) { SeeMeLog.Info("PdfTextCache.WriteNoText", ex.Message); }
         }
 
         /// <summary>
@@ -82,7 +93,7 @@ namespace SeeMe
                     return true;
                 }
             }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[SeeMe] PdfTextCache.TryRead: " + ex.Message); }
+            catch (Exception ex) { SeeMeLog.Info("PdfTextCache.TryRead", ex.Message); }
             return false;
         }
 
@@ -107,7 +118,7 @@ namespace SeeMe
                     catch { /* 单个文件删除失败不影响整体清理 */ }
                 }
             }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[SeeMe] PdfTextCache.CleanupExpired: " + ex.Message); }
+            catch (Exception ex) { SeeMeLog.Info("PdfTextCache.CleanupExpired", ex.Message); }
         }
     }
 }

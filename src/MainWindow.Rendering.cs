@@ -55,8 +55,7 @@ namespace SeeMe
 #else
             var stackHtml = "";
 #endif
-            var css = @"
-  * { margin:0; padding:0; box-sizing:border-box; }
+            var css = RenderService.PageResetCss + @"
   html,body { width:100%; height:100vh; }
   body { background:var(--bg); color:var(--text); padding:40px; font-family:'Microsoft YaHei','PingFang SC',sans-serif; line-height:1.6; transition:background-color .3s ease,color .3s ease; }
   h2 { font-size:20px; color:var(--danger); margin-bottom:14px; }
@@ -82,8 +81,7 @@ namespace SeeMe
         {
             if (state?.WebView?.CoreWebView2 == null) return;
             var name = System.Security.SecurityElement.Escape(Path.GetFileName(state.CurrentFile ?? ""));
-            var css = @"
-  * { margin:0; padding:0; box-sizing:border-box; }
+            var css = RenderService.PageResetCss + @"
   html,body { width:100%; height:100vh; }
   body { background:var(--bg); color:var(--text); padding:48px; font-family:'Microsoft YaHei','PingFang SC',sans-serif; text-align:center; transition:background-color .3s ease,color .3s ease; }
   .icon { font-size:42px; margin-bottom:12px; }
@@ -103,8 +101,7 @@ namespace SeeMe
 
         private static string BuildNoticePage(bool isDark, string title, string msg)
         {
-            var css = @"
-* { margin:0; padding:0; box-sizing:border-box; }
+            var css = RenderService.PageResetCss + @"
 html,body { width:100%; height:100vh; }
 body { display:flex; align-items:center; justify-content:center; background:var(--bg); color:var(--text);
        font-family:'Segoe UI','Microsoft YaHei',sans-serif; font-size:14px; text-align:center;
@@ -123,16 +120,12 @@ p { font-size:13px; color:var(--secondary); }
 
         private static string BuildLoadingPage(bool isDark)
         {
-            var css = @"
-  * { margin:0; padding:0; box-sizing:border-box; }
+            var css = RenderService.PageResetCss + @"
   html,body { width:100%; height:100vh; }
   body { display:flex; align-items:center; justify-content:center; background:var(--bg); color:var(--text);
          font-family:'Segoe UI','Microsoft YaHei',sans-serif; font-size:15px;
          transition:background-color .3s ease,color .3s ease; }
-  .spin { width:18px; height:18px; margin-right:10px; border:2px solid var(--border); border-top-color:var(--accent);
-           border-radius:50%; display:inline-block; animation:spin .8s linear infinite; vertical-align:middle; }
-  @keyframes spin { to { transform:rotate(360deg); } }
-";
+  " + RenderService.SpinnerCss;
             return RenderService.WrapPage(isDark, "加载中", css, "<span class='spin'></span>加载中…");
         }
 
@@ -148,6 +141,35 @@ p { font-size:13px; color:var(--secondary); }
             if (ct.IsCancellationRequested) return;
 
             var ext = Path.GetExtension(state.CurrentFile).ToLowerInvariant();
+            switch (ext)
+            {
+                case ".pdf":
+                case ".xlsx":
+                case ".docx":
+                case ".pptx":
+                case ".doc":
+                case ".docm": // 宏文档变体，anydoc 映射到 docx 解析器
+                case ".ppt":
+                case ".rtf":
+                case ".odt":
+                case ".ods":
+                case ".odp":
+                case ".epub":
+                case ".csv":
+                case ".xlsm": // 宏工作簿变体，anydoc 映射到 xlsx 解析器
+                case ".xls":
+                    await ReloadOfficeAsync(state, ext, ct);
+                    return;
+                default:
+                    // Markdown / 纯文本 / HTML 等其余格式走原始渲染链路
+                    await ReloadMarkdownAsync(state, ct);
+                    return;
+            }
+        }
+
+        /// <summary>Office/PDF 系加载：PDF 文本视图、anydoc-wasm 12 种格式（含宏变体）、旧 .xls 走 FileConverter。</summary>
+        private async Task ReloadOfficeAsync(PanelState state, string ext, CancellationToken ct)
+        {
             try
             {
                 switch (ext)
@@ -156,38 +178,26 @@ p { font-size:13px; color:var(--secondary); }
                         // PDF 统一文本视图：图文重建由页面内 JS 完成，无 C# 侧大纲
                         RenderPdf(state); MarkLoaded(state); SetOutline(null);
                         return;
-                    case ".xlsx":
-                    case ".docx":
-                    case ".pptx":
-                    case ".doc":
-                    case ".docm": // 宏文档变体，anydoc 映射到 docx 解析器
-                    case ".ppt":
-                    case ".rtf":
-                    case ".odt":
-                    case ".ods":
-                    case ".odp":
-                    case ".epub":
-                    case ".csv":
-                    case ".xlsm": // 宏工作簿变体，anydoc 映射到 xlsx 解析器
-                        // anydoc-wasm 覆盖的 12 种格式（docx/xlsx/pptx/doc/ppt/rtf/odt/ods/odp/epub/csv）及宏变体 docm/xlsm
-                        await RenderOfficeAnyDoc(state, ext); return;
                     case ".xls":
                         // .xls（旧二进制 OLE）打包的 anydoc 不支持，直接走 FileConverter
                         await RenderExcel(state); MarkLoaded(state); SetOutline(null); return;
+                    default:
+                        // anydoc-wasm 覆盖的 12 种格式（docx/xlsx/pptx/doc/ppt/rtf/odt/ods/odp/epub/csv）及宏变体 docm/xlsm
+                        await RenderOfficeAnyDoc(state, ext); return;
                 }
             }
-            catch (OperationCanceledException) { LogInfo("Reload cancelled (office): " + Path.GetFileName(state.CurrentFile)); return; }
+            catch (OperationCanceledException) { LogInfo("Reload cancelled (office): " + Path.GetFileName(state.CurrentFile)); }
             catch (Exception ex)
             {
                 LogErr("Reload office: " + ex);
                 if (!ct.IsCancellationRequested) RenderErrorPage(state, ex);
                 StatusText.Text = "读取失败: " + ex.Message;
-                return;
             }
+        }
 
-            if (ct.IsCancellationRequested) return;
-
-// ═══════════════ 以下为原始 Markdown 渲染逻辑 ═══════════════
+        /// <summary>Markdown 渲染链路：解析/后处理在后台线程执行，大文件先出加载占位。</summary>
+        private async Task ReloadMarkdownAsync(PanelState state, CancellationToken ct)
+        {
             try
             {
                 ct.ThrowIfCancellationRequested();
@@ -210,7 +220,7 @@ p { font-size:13px; color:var(--secondary); }
                 var (htmlRaw, fmCard, statsCard, tocCard, tocItems) = await Task.Run(() =>
                 {
                     ct.ThrowIfCancellationRequested();
-                    var md = ReadTextAuto(state.CurrentFile);
+                    var md = TextEncoding.ReadAuto(state.CurrentFile);
                     md = _render.StripBom(md);
                     md = _render.StripYamlFrontMatter(md, out var fmBlock);
                     var card = _render.BuildFrontMatterCard(fmBlock);
@@ -239,6 +249,9 @@ p { font-size:13px; color:var(--secondary); }
             }
         }
 
+        /// <summary>最近一次大纲条目（供思维导图视图重建标题树）。</summary>
+        private List<TocItem> _lastTocItems = new();
+
         /// <summary>填充左侧导航栏大纲列表；null/空 → 显示占位提示。跨线程安全。</summary>
         private void SetOutline(List<TocItem>? items)
         {
@@ -249,6 +262,7 @@ p { font-size:13px; color:var(--secondary); }
             }
             OutlineList.Items.Clear();
             var list = items ?? new List<TocItem>();
+            _lastTocItems = list;
             if (list.Count == 0)
             {
                 OutlineList.Visibility = Visibility.Collapsed;
@@ -280,7 +294,7 @@ p { font-size:13px; color:var(--secondary); }
         {
             if (OutlineList.SelectedItem is ListBoxItem li && li.Tag is TocItem toc)
             {
-                var target = _activePanel ?? _app.Left;
+                var target = ActiveOrLeft;
                 if (target?.WebView?.CoreWebView2 == null) return;
                 var isPdf = Path.GetExtension(target.CurrentFile ?? "")
                     .Equals(".pdf", StringComparison.OrdinalIgnoreCase);
@@ -301,34 +315,10 @@ p { font-size:13px; color:var(--secondary); }
             {
                 if (string.IsNullOrEmpty(_customCssPath) || !File.Exists(_customCssPath)) return "";
                 var fi = new FileInfo(_customCssPath);
-                if (fi.Length > 256 * 1024) return "";
+                if (fi.Length > Limits.MaxSearchBytes) return "";
                 return File.ReadAllText(_customCssPath);
             }
             catch { return ""; }
-        }
-
-        private void OnPickCustomCss(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                var dlg = new Microsoft.Win32.OpenFileDialog
-                {
-                    Filter = "CSS 文件 (*.css)|*.css|所有文件 (*.*)|*.*",
-                    Title = "选择自定义样式文件"
-                };
-                if (dlg.ShowDialog(this) == true)
-                {
-                    _customCssPath = dlg.FileName;
-                    AppSettings.Set(AppSettings.CustomCssKey, dlg.FileName);
-                    StatusText.Text = "已启用自定义样式: " + Path.GetFileName(dlg.FileName);
-                    // 立即重渲染当前文件使样式生效
-                    if (_app.Left != null && !string.IsNullOrEmpty(_app.Left.CurrentFile))
-                        _ = ReloadFileAsync(_app.Left, force: true);
-                    if (_app.IsSplitMode && _app.Right != null && !string.IsNullOrEmpty(_app.Right.CurrentFile))
-                        _ = ReloadFileAsync(_app.Right, force: true);
-                }
-            }
-            catch (Exception ex) { LogErr("OnPickCustomCss: " + ex.Message); }
         }
 
         /// <summary>状态栏「? 快捷键」按钮事件：弹出快捷键速查窗口。</summary>
@@ -344,9 +334,6 @@ p { font-size:13px; color:var(--secondary); }
                     Title = "快捷键",
                     Width = 400,
                     SizeToContent = SizeToContent.Height,
-                    Owner = this,
-                    WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                    ResizeMode = ResizeMode.NoResize,
                     ShowInTaskbar = false,
                     Background = (Brush)TryFindResource("CardBackgroundBrush") ?? Brushes.White
                 };
@@ -427,8 +414,7 @@ p { font-size:13px; color:var(--secondary); }
                 closeBtn.Click += (_, _) => w.Close();
                 panel.Children.Add(closeBtn);
 
-                w.Content = panel;
-                w.ShowDialog();
+                ShowThemedDialog(w, x => x.Content = panel);
             }
             catch (Exception ex) { LogErr("ShowShortcutsDialog: " + ex.Message); }
         }
@@ -436,7 +422,7 @@ p { font-size:13px; color:var(--secondary); }
         /// <summary>将当前预览面板截图导出为图片（格式 PNG/JPG 与 1x/2x 分辨率可在设置中配置）。</summary>
         private async void OnExportImage(object sender, RoutedEventArgs e)
         {
-            var state = _activePanel ?? _app.Left;
+            var state = ActiveOrLeft;
             if (state?.WebView?.CoreWebView2 == null || state.WebView.ActualWidth < 10 || state.WebView.ActualHeight < 10)
             {
                 StatusText.Text = "无可导出的预览内容";
@@ -640,29 +626,6 @@ p { font-size:13px; color:var(--secondary); }
             }
         }
 
-        /// <summary>
-        /// 按 BOM → UTF-8 → GB18030/系统默认 顺序探测读取文本文件，避免 GBK/ANSI 编码的
-        /// 中文 .md 文件被按 UTF-8 解码成乱码。GB18030 是 GBK 的超集（含 GB2312），
-        /// 且现代 .NET 内置支持，无需注册代码页。
-        /// </summary>
-
-        private static string ReadTextAuto(string path)
-        {
-            var bytes = File.ReadAllBytes(path);
-            // 1) BOM 优先
-            if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
-                return Encoding.UTF8.GetString(bytes, 3, bytes.Length - 3);
-            if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE)
-                return Encoding.Unicode.GetString(bytes, 2, bytes.Length - 2);
-            if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF)
-                return Encoding.BigEndianUnicode.GetString(bytes, 2, bytes.Length - 2);
-            // 2) 无 BOM：先按 UTF-8 严格解析，出现替换字符说明不是 UTF-8
-            var asUtf8 = Encoding.UTF8.GetString(bytes);
-            if (asUtf8.IndexOf('\uFFFD') < 0) return asUtf8;
-            // 3) 回退到 GB18030（GBK 超集，覆盖更广；.NET Core 内置无需注册）
-            try { return Encoding.GetEncoding("GB18030").GetString(bytes); }
-            catch { return Encoding.Default.GetString(bytes); }
-        }
 
 // ═══════════════ PDF / Excel / PPT 渲染 ═══════════════
 
@@ -743,10 +706,10 @@ p { font-size:13px; color:var(--secondary); }
 <html{htmlClass}><head><meta charset='utf-8'/>
 <meta name='viewport' content='width=device-width,initial-scale=1'/>
 <meta name='referrer' content='no-referrer'/>
-<meta http-equiv='Content-Security-Policy' content=""default-src 'self' https://appassets.example; script-src 'nonce-{nonce}' https://appassets.example; style-src 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://appassets.example https://pdffiles.example; worker-src 'self' https://appassets.example blob:;"">
+<meta http-equiv='Content-Security-Policy' content=""default-src 'self' https://appassets.example; script-src 'nonce-{nonce}' https://appassets.example; style-src 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://appassets.example https://pdffiles.example; worker-src 'self' https://appassets.example blob:; base-uri 'self'; form-action 'none';"">
 <style>
 {RenderService.ThemeCss()}
-  * {{ margin:0; padding:0; box-sizing:border-box; }}
+{RenderService.PageResetCss}
   html {{ font-size:14px; }}
   html,body {{ width:100%; height:100vh; }}
   body {{ background:var(--bg); color:var(--text); transition:background-color .3s ease,color .3s ease; }}
@@ -763,7 +726,9 @@ p { font-size:13px; color:var(--secondary); }
   .pdf-note {{ margin:14px 0; padding:10px 14px; border-left:3px solid var(--quote); background:var(--quote-bg);
               color:var(--quote-text); font-size:.8rem; border-radius:0 4px 4px 0; }}
   mark.seeme-hl {{ background:#FBBF24; color:#1F2937; border-radius:2px; padding:1px 2px; }}
-  mark.seeme-cur {{ background:#3B82F6; color:#fff; }}
+  mark.seeme-cur {{ background:var(--accent); color:#fff; }}
+  {(isDark && _render is RenderService rsp && rsp.EyeCare ? "body > * { filter:sepia(.3) saturate(.78) brightness(.95) !important; }" : "")}
+  {(!isDark && _render is RenderService rs2 && rs2.EyeCare ? "body > * { filter:sepia(.35) saturate(.82) brightness(1.04) !important; }" : "")}
   ::-webkit-scrollbar {{ width:8px; height:8px; }}
   ::-webkit-scrollbar-thumb {{ background:var(--h1-border); border-radius:4px; }}
 </style>
@@ -771,14 +736,19 @@ p { font-size:13px; color:var(--secondary); }
   <div id='pdf-doc' class='content'></div>
 <script nonce='{nonce}'>
 window.__PDF_READ_CONF = {{ pdf: {jsPdfUrl}, restoreY: {jsRestoreY}, tok: {jsToken} }};
-function setTheme(dark){{var h=document.documentElement;if(dark)h.classList.add('dark');else h.classList.remove('dark');}}
+{RenderService.SetThemeScript}
 </script>
-<script src='https://appassets.example/pdfjs/pdf.min.js?v=11'></script>
+<script type='module' nonce='{nonce}'>
+import * as pdfjsLib from 'https://appassets.example/pdfjs/pdf4.min.js';
+window.pdfjsLib = pdfjsLib;
+document.dispatchEvent(new Event('seeme-pdfjs-ready'));
+</script>
 <script nonce='{nonce}'>{RenderService.SearchScript}</script>
 <script nonce='{nonce}'>
 {PdfReadingScript}
 </script>
 <script nonce='{nonce}'>{annotationScript}</script>
+<script nonce='{nonce}'>{RenderService.KeyBridgeScript}</script>
 </body></html>";
         }
 
@@ -793,14 +763,25 @@ function setTheme(dark){{var h=document.documentElement;if(dark)h.classList.add(
   var pdfUrl = conf.pdf || '';
   var restoreY = conf.restoreY || 0;
   var docEl = document.getElementById('pdf-doc');
-  if (!pdfUrl || !window.pdfjsLib) { return; }
-
-  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://appassets.example/pdfjs/pdf.worker.min.js';
-  fetch(pdfUrl)
-    .then(function (r) { if (!r.ok) throw new Error('fetch ' + r.status); return r.arrayBuffer(); })
-    .then(function (buf) { return pdfjsLib.getDocument({ data: new Uint8Array(buf), disableAutoFetch: true, disableStream: true }).promise; })
-    .then(buildDoc)
-    .catch(function (err) { console.error('[pdf-read] load failed:', err); });
+  // 库引导：PDF.js 4.x 为纯 ESM，由页面内联 module 挂 window.pdfjsLib 后广播 seeme-pdfjs-ready。
+  // 本脚本（经典脚本）先于 module 执行，因此用事件等待库就绪再取 PDF 字节。
+  function boot() {
+    if (!pdfUrl || !window.pdfjsLib) { return; }
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://appassets.example/pdfjs/pdf4.worker.min.js';
+    fetch(pdfUrl)
+      .then(function (r) { if (!r.ok) throw new Error('fetch ' + r.status); return r.arrayBuffer(); })
+      .then(function (buf) {
+        return pdfjsLib.getDocument({
+          data: new Uint8Array(buf), disableAutoFetch: true, disableStream: true,
+          cMapUrl: 'https://appassets.example/pdfjs/cmaps/', cMapPacked: true,
+          standardFontDataUrl: 'https://appassets.example/pdfjs/standard_fonts/'
+        }).promise;
+      })
+      .then(buildDoc)
+      .catch(function (err) { console.error('[pdf-read] load failed:', err); });
+  }
+  if (window.pdfjsLib) { boot(); }
+  else { document.addEventListener('seeme-pdfjs-ready', boot, { once: true }); }
 
   // 诊断日志 → 宿主 error.log（kind:pdf-read-log，C# 侧记录）
   function dbg(msg) {
@@ -1176,7 +1157,9 @@ function setTheme(dark){{var h=document.documentElement;if(dark)h.classList.add(
       canvas.width = Math.max(1, Math.floor(vp.width * dpr));
       canvas.height = Math.max(1, Math.floor(vp.height * dpr));
       var ctx = canvas.getContext('2d');
-      return page.render({ canvasContext: ctx, viewport: vp }).promise
+      // isEvalSupported:false —— CVE-2024-4367 官方缓解：禁用字体矩阵 eval 编译路径
+      //（页面 CSP 无 unsafe-eval 本已拦截，此处显式关闭构成双保险）
+      return page.render({ canvasContext: ctx, viewport: vp, isEvalSupported: false }).promise
         .then(function () {
           var url = canvas.toDataURL('image/jpeg', 0.95);
           if (img) { img.src = url; img.style.visibility = 'visible'; }
@@ -1295,6 +1278,13 @@ function setTheme(dark){{var h=document.documentElement;if(dark)h.classList.add(
         {
             if (string.IsNullOrEmpty(state.CurrentFile)) return;
             if (CheckFileSize(state)) return;
+            // xlsx/xlsm 高保真：Univer 原生渲染（多 sheet / 公式 / 样式全保留），替代 anydoc→Markdown
+            if (ext.Equals(".xlsx", StringComparison.OrdinalIgnoreCase)
+                || ext.Equals(".xlsm", StringComparison.OrdinalIgnoreCase))
+            {
+                await RenderExcelUniverAsync(state);
+                return;
+            }
             if (!AnyDocAssetsPresent()) { await FallbackOfficeAsync(state, ext); return; }
             var isDark = _theme.Current == _theme.Dark;
             // 小文档（≤1MB）跳过首个加载占位，直接进桥接页（自带 spinner），更快呈现；大文档保留占位防空白
@@ -1321,6 +1311,25 @@ function setTheme(dark){{var h=document.documentElement;if(dark)h.classList.add(
             _ = AnyDocWatchdogAsync(state, token);
         }
 
+        /// <summary>xlsx/xlsm 高保真渲染（Univer）：字节注入 Univer 页面原生渲染，多 sheet/公式/样式全保留。</summary>
+        private async Task RenderExcelUniverAsync(PanelState state)
+        {
+            try
+            {
+                var isDark = _theme.Current == _theme.Dark;
+                var bytes = await Task.Run(() => File.ReadAllBytes(state.CurrentFile));
+                state.WebView.NavigateToString(RenderService.BuildUniverPage(isDark, bytes));
+                MarkLoaded(state);
+                SetOutline(null);
+                LogInfo("Univer xlsx: " + Path.GetFileName(state.CurrentFile));
+            }
+            catch (Exception ex)
+            {
+                LogErr("Univer render: " + ex);
+                RenderErrorPage(state, ex);
+            }
+        }
+
         /// <summary>超时保护：桥接页/worker 5 秒未回结果则回退 FileConverter，避免永远停在加载页。</summary>
         private async Task AnyDocWatchdogAsync(PanelState state, string token)
         {
@@ -1335,12 +1344,6 @@ function setTheme(dark){{var h=document.documentElement;if(dark)h.classList.add(
             }
         }
 
-        /// <summary>
-        /// PDF 文本层提取：用 anydoc-wasm 的 pdf 能力（内嵌 pdf-inspector）把文本型 PDF 转成
-        /// Markdown 并写缓存，供内容搜索；扫描版（无文本层）写 .no 标记。
-        /// 复用 Office 桥接页 + worker 链路（AnyDocPending.PdfExtract 模式：结果只缓存不渲染）。
-        /// 任何失败/超时都静默返回，不阻断 PDF.js 渲染。
-        /// </summary>
         /// <summary>
         /// PDF 文本层提取：在隐藏的 ExtractView 里跑 anydoc 桥接页（fetch 字节 → worker → Markdown），
         /// 写缓存供内容搜索；扫描版写 .no 标记。结果经 OnExtractMessage 按令牌匹配面板回写。
@@ -1402,16 +1405,14 @@ function setTheme(dark){{var h=document.documentElement;if(dark)h.classList.add(
 <html{cls}><head><meta charset='utf-8'/>
 <meta name='viewport' content='width=device-width,initial-scale=1'/>
 <meta name='referrer' content='no-referrer'/>
-<meta http-equiv='Content-Security-Policy' content=""default-src 'self' https://appassets.example https://docfiles.example; script-src 'nonce-{nonce}' https://appassets.example 'unsafe-eval'; style-src 'unsafe-inline'; img-src 'self' data: https://appassets.example; worker-src 'self' blob: https://appassets.example; connect-src 'self' https://appassets.example https://docfiles.example;"">
+<meta http-equiv='Content-Security-Policy' content=""default-src 'self' https://appassets.example https://docfiles.example; script-src 'nonce-{nonce}' https://appassets.example 'wasm-unsafe-eval'; style-src 'unsafe-inline'; img-src 'self' data: https://appassets.example; worker-src 'self' blob: https://appassets.example; connect-src 'self' https://appassets.example https://docfiles.example; base-uri 'self'; form-action 'none';"">
 <style>
 {RenderService.ThemeCss()}
-  * {{ margin:0; padding:0; box-sizing:border-box; }}
+{RenderService.PageResetCss}
   html,body {{ width:100%; height:100vh; }}
   body {{ display:flex; align-items:center; justify-content:center; background:var(--bg); color:var(--text);
          font-family:'Segoe UI','Microsoft YaHei',sans-serif; font-size:15px; }}
-  .spin {{ width:18px; height:18px; margin-right:10px; border:2px solid var(--border); border-top-color:var(--accent);
-          border-radius:50%; display:inline-block; animation:spin .8s linear infinite; vertical-align:middle; }}
-  @keyframes spin {{ to {{ transform:rotate(360deg); }} }}
+  {RenderService.SpinnerCss}
 </style>
 </head><body><span class='spin'></span>解析文档…</body>
 <script nonce='{nonce}'>
@@ -1488,8 +1489,8 @@ window.__ANYDOC_CONF = {{ url: {jsDocUrl}, id: {jsToken}, ext: {jsExt} }};
             }
         }
 
-        /// <summary>回退到 FileConverter（原 OpenXML/PdfPig 解析）。仅 docx/xlsx/pptx 有本地回退解析器；
-        /// 新增的 anydoc 格式（doc/ppt/rtf/odt/ods/odp/epub/csv）无回退解析器，直接抛错走错误页。</summary>
+        /// <summary>回退到本地解析器。docx 走 docx-preview 高保真渲染（替代 OpenXML 自解析）；
+        /// xlsx/pptx 走 FileConverter；新增的 anydoc 格式（doc/ppt/rtf/odt/ods/odp/epub/csv）无回退，直接抛错走错误页。</summary>
         private async Task FallbackOfficeAsync(PanelState state, string ext)
         {
             if (string.IsNullOrEmpty(state.CurrentFile)) return;
@@ -1497,13 +1498,16 @@ window.__ANYDOC_CONF = {{ url: {jsDocUrl}, id: {jsToken}, ext: {jsExt} }};
             {
                 var isDark = _theme.Current == _theme.Dark;
                 state.WebView.NavigateToString(BuildLoadingPage(isDark));
-                string content = ext switch
+                if (ext.Equals(".docx", StringComparison.OrdinalIgnoreCase))
                 {
-                    ".xlsx" => await _converter.ExcelToHtml(state.CurrentFile),
-                    ".pptx" => await _converter.PptToHtml(state.CurrentFile),
-                    ".docx" => await _converter.DocxToHtml(state.CurrentFile),
-                    _ => throw new NotSupportedException("该格式无本地回退解析器（需 anydoc-wasm）：" + ext)
-                };
+                    // docx 高保真回退：docx-preview 浏览器端渲染（样式保真度远高于 OpenXML 自解析）
+                    var bytes = await Task.Run(() => File.ReadAllBytes(state.CurrentFile));
+                    state.WebView.NavigateToString(RenderService.BuildDocxPreviewPage(isDark, bytes));
+                    MarkLoaded(state);
+                    SetOutline(null);
+                    return;
+                }
+                string content = await OfficeFallback.ConvertAsync(_converter, ext, state.CurrentFile);
                 var html = _render.BuildOfficePage(content, state, this);
                 state.WebView.NavigateToString(html);
                 MarkLoaded(state);
@@ -1633,7 +1637,7 @@ window.__ANYDOC_CONF = {{ url: {jsDocUrl}, id: {jsToken}, ext: {jsExt} }};
 
         private void OnZoomR(object sender, RoutedEventArgs e)
         {
-            if (!_app.IsSplitMode) SetSplitMode(true);
+            EnsureRightPanel();
             SetZoomDialog(_app.Right);
         }
 
@@ -1642,7 +1646,7 @@ window.__ANYDOC_CONF = {{ url: {jsDocUrl}, id: {jsToken}, ext: {jsExt} }};
 
         private void OnFindR(object sender, RoutedEventArgs e)
         {
-            if (!_app.IsSplitMode) SetSplitMode(true);
+            EnsureRightPanel();
             ShowFind(_app.Right);
         }
 

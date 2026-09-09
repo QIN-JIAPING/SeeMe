@@ -23,10 +23,16 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Lucene.Net" Version="4.8.0-beta00016" />
+    <PackageReference Include="Lucene.Net.Analysis.Common" Version="4.8.0-beta00016" />
     <PackageReference Include="Markdig" Version="0.40.0" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50" />
     <PackageReference Include="DocumentFormat.OpenXml" Version="3.2.0" />
     <PackageReference Include="PdfPig" Version="0.1.15" />
+    <PackageReference Include="Sentry" Version="6.9.0" />
+    <!-- 非 UTF 编码（GB18030/GBK）在 .NET Core 需显式注册 CodePages 编码提供器 -->
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
+    <PackageReference Include="Velopack" Version="1.2.0" />
   </ItemGroup>
 
   <ItemGroup>
@@ -35,6 +41,10 @@
       <SubType>Designer</SubType>
     </ApplicationDefinition>
     <Page Include="src\MainWindow.xaml">
+      <Generator>MSBuild:Compile</Generator>
+      <SubType>Designer</SubType>
+    </Page>
+    <Page Include="src\CommandPaletteWindow.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
     </Page>
@@ -71,10 +81,31 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
+    <Content Include="Resources\echarts\*.*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Resources\markmap\*.*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Resources\docxjs\*.*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Resources\univer\*.*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="Resources\scripts\*.*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <Content Include="Resources\pdfjs\*.*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <!-- PDF.js 4.x 的 CJK 映射表与标准字体：必须显式 Include。
+         下方 Resources\**\*.* 用的是 Update，只改已存在项的属性、不会新增项，
+         子目录若漏了 Include 就永远进不了输出目录（cmaps 曾因此整包缺失）。 -->
+    <Content Include="Resources\pdfjs\cmaps\*.*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Resources\pdfjs\standard_fonts\*.*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <Content Include="Resources\anydoc\*.*">
@@ -97,9 +128,7 @@
   <!-- 兜底：SDK 单文件发布存在怪癖（曾实测漏复制 mermaid / pdfjs 资源）。
        发布后强制把整个 Resources 树再同步一遍到发布目录，确保离线资源齐全。 -->
   <Target Name="EnsureResourcesAfterPublish" AfterTargets="Publish" Condition="'$(PublishDir)' != ''">
-    <Copy SourceFiles="@(ResourceFiles)"
-          DestinationFolder="$(PublishDir)Resources\%(ResourceFiles.RecursiveDir)"
-          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(ResourceFiles)" DestinationFolder="$(PublishDir)Resources\%(ResourceFiles.RecursiveDir)" SkipUnchangedFiles="true" />
   </Target>
 
   <ItemGroup>

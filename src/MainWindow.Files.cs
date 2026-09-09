@@ -37,20 +37,23 @@ namespace SeeMe
             {
                 // 编辑态切换文件：先把未落盘的改动保存到原文件，再打开新文件（自动保存计时未到也不丢字）
                 if (state.EditMode) await FlushPendingEditAsync(state);
-                state.CurrentFile = Path.GetFullPath(path);
-                state.FileDir = Path.GetDirectoryName(state.CurrentFile);
-                state.TitleText.Text = Path.GetFileName(state.CurrentFile);
-                state.TitleText.ToolTip = Path.GetDirectoryName(state.CurrentFile) ?? "";
+                // 每文件阅读位置：离开当前文件前把最后一帧滚动位置落进存储（防未触达 scroll 上报丢失）
+                var fullPath = Path.GetFullPath(path);
+                state.CurrentFile = fullPath;
+                state.FileDir = Path.GetDirectoryName(fullPath);
+                state.TitleText.Text = Path.GetFileName(fullPath);
+                state.TitleText.ToolTip = Path.GetDirectoryName(fullPath) ?? "";
                 state.EditMode = false; // 切换文件即退出编辑态（回到预览）
+                state.LastScrollY = 0;
                 UpdateEditButtonVisibility();
                 UpdateInfoPanel(state);
                 // 取消之前的加载，避免异步竞争
                 _ = ReloadFileAsync(state, true, state.ResetCts());
                 SetupWatcher(state);
                 UpdateWindowTitle();
-                _app.History.Add(state.CurrentFile);
-                StatusText.Text = "已打开: " + Path.GetFileName(state.CurrentFile) + "（实时刷新中）";
-                LogInfo("Opened: " + Path.GetFileName(state.CurrentFile));
+                _app.History.Add(fullPath);
+                StatusText.Text = "已打开: " + Path.GetFileName(fullPath) + "（实时刷新中）";
+                LogInfo("Opened: " + Path.GetFileName(fullPath));
                 // 右栏文件变化后同步双栏占位（打开到右栏 → 双栏恢复；关闭 → 收折）
                 UpdateSplitAutoHide();
             }
@@ -67,8 +70,6 @@ namespace SeeMe
         {
             ".md", ".markdown", ".txt", ".html", ".htm", ".css", ".js", ".mjs", ".json", ".csv"
         };
-
-        private const long MaxEditBytes = 5L * 1024 * 1024; // 编辑上限 5MB，避免超大文本卡死 textarea
 
         /// <summary>可编辑文件：文本类扩展名 或 docx（docx 走 Markdown 编辑 + pandoc 回写）。</summary>
         private static bool CanEditFile(string? path)
@@ -99,7 +100,7 @@ namespace SeeMe
                 if (string.IsNullOrEmpty(state.CurrentFile) || !File.Exists(state.CurrentFile))
                 { StatusText.Text = "没有可编辑的文件"; return; }
                 var fi = new FileInfo(state.CurrentFile);
-                if (fi.Length > MaxEditBytes)
+                if (fi.Length > Limits.MaxEditBytes)
                 { StatusText.Text = "文件超过 5MB 编辑上限，请用外部编辑器"; return; }
 
                 string text;
@@ -113,8 +114,8 @@ namespace SeeMe
                 else
                 {
                     var bytes = File.ReadAllBytes(state.CurrentFile);
-                    state.EditEncoding = DetectTextEncoding(bytes);
-                    text = DecodeText(bytes, state.EditEncoding);
+                    state.EditEncoding = TextEncoding.Detect(bytes);
+                    text = TextEncoding.Decode(bytes, state.EditEncoding);
                 }
 
                 state.EditMode = true;
@@ -157,34 +158,6 @@ namespace SeeMe
             finally { _editBusy = false; }
         }
 
-        private static string DecodeText(byte[] bytes, int enc) => enc switch
-        {
-            1 => Encoding.UTF8.GetString(bytes, 3, bytes.Length - 3),
-            2 => Encoding.Unicode.GetString(bytes, 2, bytes.Length - 2),
-            3 => Encoding.BigEndianUnicode.GetString(bytes, 2, bytes.Length - 2),
-            4 => Encoding.GetEncoding("GB18030").GetString(bytes),
-            _ => Encoding.UTF8.GetString(bytes)
-        };
-
-        private static int DetectTextEncoding(byte[] bytes)
-        {
-            if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) return 1;
-            if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) return 2;
-            if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF) return 3;
-            var asUtf8 = Encoding.UTF8.GetString(bytes);
-            if (asUtf8.IndexOf('\uFFFD') < 0) return 0;
-            return 4;
-        }
-
-        private static Encoding SaveEncoding(int enc) => enc switch
-        {
-            1 => new UTF8Encoding(true),
-            2 => Encoding.Unicode,
-            3 => Encoding.BigEndianUnicode,
-            4 => Encoding.GetEncoding("GB18030"),
-            _ => new UTF8Encoding(false)
-        };
-
         /// <summary>编辑页：主题化 textarea + Ctrl+S 保存 + 输入停顿自动保存（间隔 5/10/30s，postMessage edit-save 回传宿主）。</summary>
         private string BuildEditPage(bool isDark, string content, string ext, bool autoSave, int autoDelay)
         {
@@ -199,10 +172,10 @@ namespace SeeMe
 <html{cls}><head><meta charset='utf-8'/>
 <meta name='viewport' content='width=device-width,initial-scale=1'/>
 <meta name='referrer' content='no-referrer'/>
-<meta http-equiv='Content-Security-Policy' content=""default-src 'self' https://appassets.example; script-src 'nonce-{nonce}' https://appassets.example; style-src 'unsafe-inline';"">
+<meta http-equiv='Content-Security-Policy' content=""default-src 'self' https://appassets.example; script-src 'nonce-{nonce}' https://appassets.example; style-src 'unsafe-inline'; base-uri 'self'; form-action 'none';"">
 <style>
 {RenderService.ThemeCss()}
-  * {{ margin:0; padding:0; box-sizing:border-box; }}
+{RenderService.PageResetCss}
   html,body {{ width:100%; height:100vh; background:var(--bg); color:var(--text); }}
   #bar {{ position:fixed; top:0; left:0; right:0; z-index:10; display:flex; align-items:center; gap:8px;
     padding:6px 12px; background:var(--card); border-bottom:1px solid var(--border); font-size:11px; color:var(--secondary); }}
@@ -332,7 +305,7 @@ namespace SeeMe
 
         private void SaveEditAsText(PanelState state, string text)
         {
-            File.WriteAllText(state.CurrentFile!, text, SaveEncoding(state.EditEncoding));
+            File.WriteAllText(state.CurrentFile!, text, TextEncoding.GetEncoding(state.EditEncoding));
             MarkLoaded(state); // 更新时间戳/大小，让内容感知防抖与后续刷新正确
         }
 
@@ -443,48 +416,41 @@ namespace SeeMe
             catch (Exception ex) { LogErr("Refresh list: " + ex.Message); }
         }
 
+        /// <summary>全文检索索引（Lucene）：惰性初始化，索引目录 %LOCALAPPDATA%\SeeMe\lucene。</summary>
+        private SearchIndexService? _searchIndex;
+
         /// <summary>
-        /// 内容搜索（搜索框输入 ">关键词"）：后台线程扫描历史文件内容（限量 256KB/文件），
-        /// 命中即列出。避免大文件/大量文件在 UI 线程同步读取卡顿。
+        /// 内容搜索（搜索框输入 ">关键词"）：走 Lucene 全文索引（秒级），替代旧线性扫描。
+        /// 首次搜索自动建索引（限量 256KB/文件），文件变化自动重建；命中即列出。
         /// </summary>
         private async void RefreshByContent(string keyword)
         {
             try
             {
                 if (string.IsNullOrEmpty(keyword)) { RefreshRecentFilesList(); return; }
+                _searchIndex ??= new SearchIndexService(Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "SeeMe", "lucene"));
                 var kw = keyword.ToLowerInvariant();
                 // pdfStats: [0]=扫描版 PDF（无文本层） [1]=未提取文本的 PDF
                 var pdfStats = new int[2];
                 var hits = await Task.Run(() =>
                 {
-                    var results = new List<string>();
-                    foreach (var p in _app.History.Entries)
+                    var files = _app.History.Entries
+                        .Where(p => !string.IsNullOrEmpty(p) && File.Exists(p))
+                        .ToList();
+                    foreach (var p in files)
                     {
-                        if (string.IsNullOrEmpty(p) || !File.Exists(p)) continue;
-                        try
+                        if (!FileTypes.IsPdf(Path.GetExtension(p))) continue;
+                        if (PdfTextCache.TryRead(p, out var pdfText, out var hasText))
                         {
-                            if (FileTypes.IsPdf(Path.GetExtension(p)))
-                            {
-                                // PDF：只搜索已提取的文本层缓存（打开过一次即提取落盘）
-                                if (PdfTextCache.TryRead(p, out var pdfText, out var hasText))
-                                {
-                                    if (hasText && !string.IsNullOrEmpty(pdfText)
-                                        && pdfText.ToLowerInvariant().Contains(kw))
-                                        results.Add(p);
-                                    else if (!hasText) pdfStats[0]++;
-                                }
-                                else pdfStats[1]++;
-                                continue;
-                            }
-                            var fi = new FileInfo(p);
-                            if (fi.Length > 256 * 1024) continue; // 限量
-                            var content = File.ReadAllText(p);
-                            if (content.ToLowerInvariant().Contains(kw))
-                                results.Add(p);
+                            if (!hasText) pdfStats[0]++;
                         }
-                        catch { }
+                        else pdfStats[1]++;
                     }
-                    return results;
+                    string? PdfTextProvider(string p)
+                        => PdfTextCache.TryRead(p, out var t, out var has) && has ? t : null;
+                    return _searchIndex!.Search(files, PdfTextProvider, kw, out _).ToList();
                 });
 
                 var bookmarked = hits.Where(p => _bookmarks.Contains(p)).ToList();
@@ -589,7 +555,7 @@ namespace SeeMe
             }
             else
             {
-                target = _activePanel ?? _app.Left;
+                target = ActiveOrLeft;
             }
 
             _activePanel = target;
@@ -648,9 +614,6 @@ namespace SeeMe
             {
                 Title = "清空最近文件？",
                 Width = 380, Height = 210,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Owner = this,
-                ResizeMode = ResizeMode.NoResize,
                 Background = (Brush)FindResource("CardBackgroundBrush")
             };
 
@@ -702,8 +665,7 @@ namespace SeeMe
             row.Children.Add(clearBtn);
             panel.Children.Add(row);
 
-            win.Content = panel;
-            win.ShowDialog();
+            ShowThemedDialog(win, w => w.Content = panel);
             return result;
         }
 
@@ -739,7 +701,7 @@ namespace SeeMe
 
         private void OnCtxOpenInRight(object sender, RoutedEventArgs e)
         {
-            if (!_app.IsSplitMode) SetSplitMode(true);
+            EnsureRightPanel();
             OpenRecentInto(_app.Right);
         }
 
@@ -883,7 +845,7 @@ namespace SeeMe
                     var ext = Path.GetExtension(p);
                     if (!FileTypes.IsSupported(ext))
                         return false;
-                    // Magic Bytes 校验：验证文件头与扩展名一致
+                    // Magic Bytes 校验：验证文件头与扩展名一致（逻辑见 MagicBytes.MatchesExt）
                     var header = new byte[8];
                     try
                     {
@@ -891,17 +853,7 @@ namespace SeeMe
                         if (fs.Read(header, 0, 8) < 4) return false;
                     }
                     catch { return false; }
-                    return ext switch
-                    {
-                        ".pdf" => header[0] == 0x25 && header[1] == 0x50 && header[2] == 0x44 && header[3] == 0x46,  // %PDF
-                        ".docx" or ".docm" or ".xlsx" or ".xlsm" or ".pptx" or ".odt" or ".ods" or ".odp" or ".epub" =>
-                            header[0] == 0x50 && header[1] == 0x4B && header[2] == 0x03 && header[3] == 0x04, // ZIP/PK
-                        ".doc" or ".xls" or ".ppt" =>
-                            header[0] == 0xD0 && header[1] == 0xCF && header[2] == 0x11 && header[3] == 0xE0, // OLE2
-                        ".rtf" =>
-                            header[0] == 0x7B && header[1] == 0x5C && header[2] == 0x72 && header[3] == 0x74 && header[4] == 0x66, // {\rtf
-                        _ => true // .md / .csv 等纯文本跳过
-                    };
+                    return MagicBytes.MatchesExt(ext, header);
                 }
                 catch { return false; }
             }).ToList();
@@ -960,7 +912,7 @@ namespace SeeMe
         /// 仅当目标确实是右栏时才自动开启分栏，其余情况保持当前布局——拖入多个选「仅第一个」时绝不自动分栏。</summary>
         private void OpenDroppedSingle(string path)
         {
-            var target = _activePanel ?? _app.Left;
+            var target = ActiveOrLeft;
             if (target == null) return;
             if (_app.IsSplitMode && _app.Right != null && !string.IsNullOrEmpty(target.CurrentFile) && string.IsNullOrEmpty(_app.Right.CurrentFile))
                 target = _app.Right;
@@ -991,9 +943,6 @@ namespace SeeMe
                 Title = "打开方式",
                 Width = 400,
                 SizeToContent = SizeToContent.Height,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Owner = this,
-                ResizeMode = ResizeMode.NoResize,
                 Background = (Brush)FindResource("CardBackgroundBrush")
             };
 
@@ -1059,8 +1008,7 @@ namespace SeeMe
             panel.Children.Add(splitBtn);
             panel.Children.Add(cancelBtn);
 
-            win.Content = panel;
-            win.ShowDialog();
+            ShowThemedDialog(win, w => w.Content = panel);
             return result;
         }
 

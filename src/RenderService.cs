@@ -12,7 +12,7 @@ using Markdig;
 
 namespace SeeMe
 {
-    public class RenderService : IRenderService
+    public partial class RenderService : IRenderService
     {
         /// <summary>WebView2 铏氭嫙涓绘満鍚嶏紝鏄犲皠鍒版湰鍦? Resources 鐩綍锛岀敤浜庡畨鍏ㄥ姞杞界绾? JS/CSS/瀛椾綋锛岄伩鍏? file: 鍗忚銆?</summary>
         public const string VirtualHost = "appassets.example";
@@ -67,7 +67,6 @@ namespace SeeMe
         private static readonly Regex LinkHrefRegex = new(
             @"(?<prefix><a\b[^>]*?)href\s*=\s*(?<q>[""'])(?<href>[^""']*)\k<q>(?<suffix>[^>]*>)",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
-        private const long MaxInlineImageBytes = 5 * 1024 * 1024;
 
         public readonly Regex TableHtmlRegex = new(
             @"<table[^>]*>([\s\S]*?)</table>",
@@ -75,6 +74,11 @@ namespace SeeMe
 
         public readonly Regex PreWithCodeRegex = new(
             @"<pre[^>]*>(\s*)<code([^>]*)>([\s\S]*?)</code>\s*</pre>",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        // 围栏代码块 → 图表/思维导图：匹配 UpgradePreBlocks 升级后的形态
+        private static readonly Regex FencedBlockRegex = new(
+            @"<pre class=""code-block""[^>]*><code class=""language-(?<lang>echarts|markmap)""[^>]*>(?<body>[\s\S]*?)</code></pre>",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         public string ProcessRelativePaths(string html, string? baseDir)
@@ -107,7 +111,7 @@ namespace SeeMe
                     if (!File.Exists(full)) return $"<img{rest}>";
                     // 璇诲彇澶у皬涓婇檺锛岄伩鍏嶈秴澶ф枃浠跺唴鑱斿鑷? OOM锛圖oS锛?
                     var fi = new FileInfo(full);
-                    if (fi.Length > MaxInlineImageBytes) return $"<img{rest}>";
+                    if (fi.Length > Limits.MaxInlineImageBytes) return $"<img{rest}>";
                     // 鐩稿鍥剧墖鍐呰仈涓? data: URI锛屾棦閬垮厤 file: 鍗忚锛圕SP 宸茬鐢級锛屽張淇濊瘉绂荤嚎鍙敤
                     var mime = MimeFromExt(Path.GetExtension(full));
                     var b64 = Convert.ToBase64String(File.ReadAllBytes(full));
@@ -156,7 +160,38 @@ namespace SeeMe
             => TableHtmlRegex.Replace(html, "<div style=\"overflow-x:auto;margin:.5em 0;\">$0</div>");
 
         public string UpgradePreBlocks(string html)
-            => PreWithCodeRegex.Replace(html, "<pre class=\"code-block\" spellcheck=\"false\">$1<code$2 class=\"language-plaintext\">$3</code></pre>");
+            => PreWithCodeRegex.Replace(html, m =>
+            {
+                var attrs = m.Groups[2].Value; // <code> 标签原有属性（如 class="language-csharp"）
+                // 已有 class（带语言）则原样保留，避免追加出重复的 class 属性；无语言才补 language-plaintext
+                var codeOpen = attrs.Contains("class=", StringComparison.OrdinalIgnoreCase)
+                    ? "<code" + attrs + ">"
+                    : "<code" + attrs + " class=\"language-plaintext\">";
+                return "<pre class=\"code-block\" spellcheck=\"false\">" + m.Groups[1].Value
+                       + codeOpen + m.Groups[3].Value + "</code></pre>";
+            });
+
+        /// <summary>
+        /// 将 ```echarts / ```markmap 围栏代码块替换为图表 / 思维导图容器。
+        /// 内容存进 data-* 属性（HTML 转义），页面加载时由注入脚本 JSON.parse 后渲染。
+        /// Markdig 对代码块内容做了实体转义，这里先反转义回原始 JSON / Markdown 文本。
+        /// </summary>
+        public string RenderFencedBlocks(string html)
+        {
+            if (string.IsNullOrEmpty(html)
+                || (!html.Contains("language-echarts", StringComparison.OrdinalIgnoreCase)
+                    && !html.Contains("language-markmap", StringComparison.OrdinalIgnoreCase)))
+                return html;
+            return FencedBlockRegex.Replace(html, m =>
+            {
+                var lang = m.Groups["lang"].Value.ToLowerInvariant();
+                var raw = System.Net.WebUtility.HtmlDecode(m.Groups["body"].Value);
+                var esc = System.Security.SecurityElement.Escape(raw);
+                return lang == "echarts"
+                    ? $"<div class=\"seeme-chart\" data-echarts='{esc}'></div>"
+                    : $"<div class=\"seeme-markmap\" data-md='{esc}'></div>";
+            });
+        }
 
         public string? StripYamlFrontMatter(string md, out string? frontMatterBlock)
         {
@@ -242,35 +277,6 @@ namespace SeeMe
             return s;
         }
 
-        public System.Windows.Media.Color ParseMediaColor(string hex)
-        {
-            try
-            {
-                hex = hex.TrimStart('#');
-                if (hex.Length == 6
-                    && byte.TryParse(hex.AsSpan(0, 2), System.Globalization.NumberStyles.HexNumber, null, out var r)
-                    && byte.TryParse(hex.AsSpan(2, 2), System.Globalization.NumberStyles.HexNumber, null, out var g)
-                    && byte.TryParse(hex.AsSpan(4, 2), System.Globalization.NumberStyles.HexNumber, null, out var b))
-                    return System.Windows.Media.Color.FromRgb(r, g, b);
-            }
-            catch { }
-            return System.Windows.Media.Colors.White;
-        }
-
-        public string? TryBrushHex(FrameworkElement element, string key)
-        {
-            try
-            {
-                if (element.TryFindResource(key) is System.Windows.Media.SolidColorBrush b)
-                    return $"#{b.Color.R:X2}{b.Color.G:X2}{b.Color.B:X2}";
-            }
-            catch { }
-            return null;
-        }
-
-        public string BrushHex(FrameworkElement element, string key, string fallback) =>
-            TryBrushHex(element, key) ?? fallback;
-
         /// <summary>澶栭儴璋冪敤锛氫緷鎹紶鍏ョ殑涓婚绠＄悊鍣ㄥ垽鏂槸鍚︽殫鑹层??</summary>
         public bool IsDarkTheme(IThemeManager theme) => theme.Current == theme.Dark;
 
@@ -298,234 +304,14 @@ namespace SeeMe
         /// <summary>鐢? MainWindow 娉ㄥ叆锛氶珮浜? storage锛屾牴鎹? state.CurrentFile 鏌ヨ鍑哄綋鍓嶆枃浠剁殑鏍囨敞鍦ㄦ父鏌撴椂娉ㄥ叆椤甸潰銆?</summary>
         public IHighlightStore? HighlightStore { get; set; }
 
-        /// <summary>鐢熸垚 :root锛堜寒锛?+ html.dark锛堟殫锛夊弻濂? CSS 鍙橀噺鍧楋紙鍞竴鏉ユ簮 ThemeColors锛夈??</summary>
-        public static string ThemeCss() => ThemeColors.ThemeCss();
-
-        /// <summary>Markdown/Office/PDF 文档排版 CSS（标题/段落/引用/代码/表格/图片）。
-        /// 字号用相对单位随 body 缩放；Office 与 PDF 文本视图共用，保证观感一致。</summary>
-        public const string MdDocumentCss = @"
-.content h1,.content h2,.content h3,.content h4,.content h5,.content h6 { color:var(--heading); font-weight:600; margin:1em 0 .4em; line-height:1.3; }
-.content h1 {
-  font-size:1.5em; margin:.8em 0 .5em; padding-bottom:.3em; border-bottom:1px solid var(--h1-border);
-}
-.content h2 {
-  font-size:1.25em; padding-bottom:.2em; border-bottom:1px solid var(--border);
-}
-.content h3 { font-size:1.1em; }
-.content h4 { font-size:1em; }
-.content h5 { font-size:.92em; }
-.content h6 { font-size:.85em; color:var(--secondary); }
-.content p { margin:.6em 0; }
-.content blockquote {
-  border-left:3px solid var(--quote); background:var(--quote-bg);
-  padding:.5em 1em; margin:.8em 0; border-radius:0 4px 4px 0;
-  color:var(--quote-text);
-}
-.content code {
-  font-family:'Consolas','JetBrains Mono',monospace;
-  background:var(--code-bg); padding:2px 6px; border-radius:3px;
-  font-size:.9em;
-}
-.content pre {
-  background:var(--code-bg); padding:12px 16px; border-radius:8px;
-  overflow-x:auto; margin:.8em 0; font-size:12px; line-height:1.5;
-}
-.content table {
-  border-collapse:collapse; width:100%; margin:1em 0; font-size:.93em;
-}
-.content th, .content td {
-  border:1px solid var(--border); padding:6px 12px; text-align:left;
-}
-.content th {
-  background:var(--card); font-weight:600; color:var(--heading);
-}
-.content tr:hover td {
-  background:var(--row-hov);
-}
-html.dark .content tr:hover td {
-  background:rgba(255,255,255,.06);
-}
-.content img {
-  max-width:100%; border-radius:4px; margin:.5em 0;
-}
-";
-
-        /// <summary>鍩虹 setTheme锛氫粎鍒? dark class銆傚瓙椤甸潰濡傞渶鑱斿姩锛圥rism/Mermaid锛夊彲鑷鎵╁睍鍚屽悕鍑芥暟銆?</summary>
-        public static string SetThemeScript =>
-            "function setTheme(dark){var h=document.documentElement;if(dark)h.classList.add('dark');else h.classList.remove('dark');}";
-
-        /// <summary>
-        /// 椤靛唴鎼滅储鑴氭湰锛坢d 涓? Office 椤靛叡鐢級锛氬涓荤粡 __seemeSearch/Next/Prev 璋冪敤锛?
-        /// 楂樹寒 mark 骞剁粡 postMessage 鍥炴姤 search-result銆俆reeWalker 蹇収鍏堟敹闆嗗啀鏀? DOM锛堥伩鍏嶈烦鑺傜偣锛夈??
-        /// </summary>
-        public static string SearchScript =>
-            @"
-var __searchMarks=[], __searchIdx=0, __searchQuery='';
-function __searchReport(){ try{ window.chrome.webview.postMessage(JSON.stringify({kind:'search-result',count:__searchMarks.length,current:__searchMarks.length?__searchIdx+1:0})); }catch(e){} }
-function __searchClear(){
-  for(var i=0;i<__searchMarks.length;i++){ var m=__searchMarks[i]; if(m && m.parentNode) m.parentNode.replaceChild(document.createTextNode(m.textContent), m); }
-  __searchMarks=[]; __searchIdx=0;
-}
-window.__seemeSearch=function(q){
-  __searchClear();
-  __searchQuery=(q||'');
-  if(!__searchQuery){ __searchReport(); return; }
-  var needle=__searchQuery.toLowerCase();
-  var allNodes=[];
-  var walker=document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
-  var node;
-  while((node=walker.nextNode())) allNodes.push(node);
-  for(var n=0;n<allNodes.length;n++){
-    var tn=allNodes[n];
-    var p=tn.parentNode;
-    if(!p || p.tagName==='SCRIPT' || p.tagName==='STYLE' || p.tagName==='MARK') continue;
-    var anc=p.closest ? p.closest('.fm-card') : null;
-    if(anc) continue;
-    var text=tn.textContent, lower=text.toLowerCase(), idx=0;
-    while((idx=lower.indexOf(needle, idx))>=0){
-      try{
-        var range=document.createRange();
-        range.setStart(tn, idx); range.setEnd(tn, idx+needle.length);
-        var mark=document.createElement('mark');
-        mark.className='seeme-hl';
-        range.surroundContents(mark);
-        __searchMarks.push(mark);
-        text=tn.textContent; lower=text.toLowerCase(); idx=0;
-      }catch(e){ break; }
-    }
-  }
-  if(__searchMarks.length) __searchMarks[0].scrollIntoView({behavior:'smooth',block:'center'});
-  __searchReport();
-};
-window.__seemeSearchNext=function(){
-  if(!__searchMarks.length) return;
-  __searchMarks[__searchIdx].className='seeme-hl';
-  __searchIdx=(__searchIdx+1)%__searchMarks.length;
-  __searchMarks[__searchIdx].className='seeme-hl seeme-cur';
-  __searchMarks[__searchIdx].scrollIntoView({behavior:'smooth',block:'center'});
-  __searchReport();
-};
-window.__seemeSearchPrev=function(){
-  if(!__searchMarks.length) return;
-  __searchMarks[__searchIdx].className='seeme-hl';
-  __searchIdx=(__searchIdx-1+__searchMarks.length)%__searchMarks.length;
-  __searchMarks[__searchIdx].className='seeme-hl seeme-cur';
-  __searchMarks[__searchIdx].scrollIntoView({behavior:'smooth',block:'center'});
-  __searchReport();
-};";
-
-        /// <summary>
-        /// 页内高亮标注脚本（md 与 Office 页共用）：选中文本 → &lt;mark&gt;，按文件持久化到 HighlightStore；
-        /// 加载时把存储的标注按文本匹配重新包裹；右键标注可删除；点击标注通知宿主聚焦笔记面板对应条目。
-        /// </summary>
-        public static string BuildAnnotationScript(string itemsJson)
-        {
-            const string s = @"
-// ═══ 选区高亮 + 笔记标注 ═══
-window.__seemeAnn = { mode:false, items:[] };
-window.__setAnnMode = function(on){ window.__seemeAnn.mode = !!on; if(document.body) document.body.classList.toggle('seeme-ann-active', on); };
-function __annPost(obj){ try{ window.chrome.webview.postMessage(JSON.stringify(obj)); }catch(e){} }
-window.__seemeApplyAnn = function(items){
-  var marks = document.querySelectorAll('mark.seeme-ann');
-  for(var i=marks.length-1;i>=0;i--){ var m=marks[i]; var t=document.createTextNode(m.textContent); if(m.parentNode) m.parentNode.replaceChild(t,m); }
-  window.__seemeAnn.items = items || [];
-  var list = window.__seemeAnn.items;
-  var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
-  var nodes=[]; var n; while((n=walker.nextNode())) nodes.push(n);
-  // 每条标注独立在全部文本节点中找匹配（同段落多条标注都能恢复；之前按节点优先只恢复第一条）
-  for(var j=0;j<list.length;j++){
-    var it=list[j]; if(!it||!it.text) continue;
-    for(var k=0;k<nodes.length;k++){
-      var tn=nodes[k]; var p=tn.parentNode;
-      if(!p) continue;
-      var tag=(p.tagName||'').toUpperCase();
-      if(tag==='SCRIPT'||tag==='STYLE'||tag==='MARK'||tag==='CODE') continue;
-      if(p.closest){ if(p.closest('pre')||p.closest('code')||p.closest('.fm-card')) continue; }
-      var idx=tn.textContent.indexOf(it.text);
-      if(idx<0) continue;
-      try{
-        var range=document.createRange();
-        range.setStart(tn,idx); range.setEnd(tn,idx+it.text.length);
-        var mark=document.createElement('mark');
-        mark.className='seeme-ann'; mark.setAttribute('data-id',it.id);
-        if(it.note) mark.title=it.note;
-        range.surroundContents(mark);
-      }catch(e){}
-      break;
-    }
-  }
-};
-document.addEventListener('mouseup', function(e){
-  var ann=window.__seemeAnn; if(!ann.mode) return;
-  var sel=window.getSelection(); if(!sel||sel.isCollapsed) return;
-  var text=(sel.toString()||'').trim();
-  if(!text) return;
-  var node=sel.anchorNode;
-  if(node&&node.parentElement&&node.parentElement.closest){
-    var skip=node.parentElement.closest('pre')||node.parentElement.closest('code')||node.parentElement.closest('.fm-card')||node.parentElement.closest('mark.seeme-ann');
-    if(skip){ sel.removeAllRanges(); return; }
-  }
-  var range=sel.getRangeAt(0);
-  if(!range||range.collapsed){ sel.removeAllRanges(); return; }
-  try{
-    var mark=document.createElement('mark');
-    mark.className='seeme-ann';
-    var id='ann'+Date.now().toString(36)+Math.floor(Math.random()*1e6).toString(36);
-    mark.setAttribute('data-id',id);
-    range.surroundContents(mark);
-    var ctxEl=mark.closest('h1,h2,h3,h4,h5,h6,p,blockquote,li,td,th');
-    var ctx=ctxEl?ctxEl.textContent.trim():'';
-    if(ctx.length>160) ctx=ctx.substring(0,160)+'…';
-    __annPost({kind:'highlight-add',id:id,text:text,context:ctx});
-  }catch(err){}
-  sel.removeAllRanges();
-});
-document.addEventListener('contextmenu', function(e){
-  var t=e.target; var m=(t&&t.closest)?t.closest('mark.seeme-ann'):null;
-  if(!m) return;
-  e.preventDefault();
-  var id=m.getAttribute('data-id');
-  var txt=document.createTextNode(m.textContent);
-  if(m.parentNode) m.parentNode.replaceChild(txt,m);
-  __annPost({kind:'highlight-remove',id:id});
-});
-document.addEventListener('click', function(e){
-  var t=e.target; var m=(t&&t.closest)?t.closest('mark.seeme-ann'):null;
-  if(!m) return;
-  var id=m.getAttribute('data-id');
-  if(id) __annPost({kind:'highlight-click',id:id});
-});
-window.__seemeApplyAnn(__ANN_ITEMS__);
-";
-            return s.Replace("__ANN_ITEMS__", itemsJson ?? "[]");
-        }
-
-        /// <summary>
-        /// 缁熶竴椤甸潰澶栧３锛氭墍鏈? NavigateToString 鐨勭畝鍗曢〉闈紙閿欒/鍔犺浇/鍗犱綅/鏂囦欢涓㈠け锛夐兘璧拌繖閲岋紝
-        /// 淇濊瘉蹇呯劧鍖呭惈瀹屾暣鍙屽 CSS 鍙橀噺涓? setTheme锛屾潨缁?"鍒囨崲瀹屽叏鏃犳晥"鐨勯〉闈€??
-        /// </summary>
-        public static string WrapPage(bool isDark, string title, string css, string bodyHtml, string extraJs = "")
-        {
-            var cls = isDark ? " class='dark'" : "";
-            var nonce = NewNonce();
-            return $@"<!DOCTYPE html>
-<html{cls}><head><meta charset='utf-8'/>
-<meta name='viewport' content='width=device-width,initial-scale=1'/>
-<meta name='referrer' content='no-referrer'/>
-<meta http-equiv='Content-Security-Policy' content=""default-src 'self' https://appassets.example; script-src 'nonce-{nonce}' https://appassets.example; style-src 'unsafe-inline'; img-src 'self' data: https://appassets.example;"">
-<title>{System.Security.SecurityElement.Escape(title)}</title>
-<style>{ThemeCss()}{css}</style>
-</head>
-<body>
-{bodyHtml}
-<script nonce='{nonce}'>{SetThemeScript}{extraJs}</script>
-</body></html>";
-        }
-
         public string Render(string bodyHtml, PanelState state, string frontMatterCard,
             FrameworkElement resourceElement, Func<string>? logErr = null, string? customCss = null)
         {
             var isDark = IsDark();
+            // echarts / markmap 围栏代码块 → 容器（在任何样式处理前替换，避免被 Prism 捕获）
+            bodyHtml = RenderFencedBlocks(bodyHtml);
+            var hasCharts = bodyHtml.Contains("class=\"seeme-chart\"", StringComparison.Ordinal);
+            var hasMarkmaps = bodyHtml.Contains("class=\"seeme-markmap\"", StringComparison.Ordinal);
             // 涓婚鍙屽鍥哄畾鍊硷細:root 鎭掍负浜壊銆乭tml.dark 鎭掍负鏆楄壊锛堣 ThemeVars 鍞竴璋冭壊鏉匡級銆?
             // 涔嬪墠 :root 浠庛?屽綋鍓嶄富棰樸?嶇殑 WPF 璧勬簮璇诲彇锛屾殫鑹叉ā寮忎笅鐢熸垚鐨勯〉闈? :root 宸叉槸鏆楄壊鍊硷紝
             // 鍒囧洖浜壊锛堢Щ闄? dark class锛夊悗椤甸潰浠嶅彇 :root 鐨勬殫鑹插?? 鈫? 椤甸潰涓庣獥鍙ｄ富棰樹笉涓?鑷淬??
@@ -536,16 +322,13 @@ window.__seemeApplyAnn(__ANN_ITEMS__);
 html,body {{ margin:0; padding:0; background:var(--bg); color:var(--text); transition:background-color .3s ease,color .3s ease; }}
 body {{ font-family:'Microsoft YaHei','PingFang SC',Segoe UI,Helvetica,Arial,sans-serif; font-size:{FontSize.ToString(System.Globalization.CultureInfo.InvariantCulture)}px; line-height:{LineHeight.ToString(System.Globalization.CultureInfo.InvariantCulture)}; padding:16px 20px 40px; }}
 h1,h2,h3,h4,h5,h6,p,a,li,code,pre,blockquote,table,th,td,tr,hr,.fm-card,.fm-line,.fm-key,.fm-val {{ transition:background-color .35s ease,color .35s ease,border-color .35s ease; }}
-h1,h2,h3,h4,h5,h6 {{ color:var(--heading); font-weight:600; margin:1em 0 .4em; line-height:1.3; }}
-h1 {{ font-size:1.5em; border-bottom:1px solid var(--h1-border); padding-bottom:.3em; }}
-h2 {{ font-size:1.25em; border-bottom:1px solid var(--h2-border); padding-bottom:.2em; }}
-h3 {{ font-size:1.1em; }}
+{DocumentCss(false)}
 p {{ margin:.5em 0; }}
 a {{ color:var(--link); text-decoration:none; }}
 a:hover {{ text-decoration:underline; }}
 ul,ol {{ padding-left:1.4em; margin:.4em 0; }}
 li {{ margin:.15em 0; }}
-blockquote {{ border-left:3px solid var(--quote); background:var(--quote-bg); color:var(--quote-text); padding:.4em .8em; margin:.5em 0; border-radius:0 4px 4px 0; }}
+blockquote {{ padding:.4em .8em; margin:.5em 0; }}
 code {{ font-family:'Consolas','JetBrains Mono',Menlo,monospace; background:var(--code-bg); padding:1px 4px; border-radius:3px; font-size:.88em; }}
 pre {{ background:var(--pre-bg); color:var(--pre-text); padding:10px 14px; border-radius:8px; overflow-x:auto; line-height:1.45; font-size:12px; margin:.5em 0; }}
 pre code {{ background:transparent; color:inherit; padding:0; font-size:inherit; }}
@@ -555,7 +338,7 @@ th,td {{ border:1px solid var(--table-bdr); padding:4px 8px; }}
 th {{ background:var(--table-head); font-weight:600; }}
 tr:hover td {{ background:var(--table-hov); }}
 hr {{ border:none; border-top:1px solid var(--hr); margin:1em 0; }}
-img {{ max-width:100%; border-radius:4px; display:block; margin:.5em 0; }}
+img {{ display:block; margin:.5em 0; }}
 input[type=checkbox] {{ margin-right:.3em; vertical-align:-2px; }}
 .fm-card {{ background:var(--fm-bg); border-radius:8px; padding:10px 14px; margin:.5em 0 1em; font-size:12px; line-height:1.8; }}
 .toc-title {{ font-weight:600; color:var(--heading); margin-bottom:4px; }}
@@ -566,7 +349,7 @@ input[type=checkbox] {{ margin-right:.3em; vertical-align:-2px; }}
 .fm-val {{ color:var(--text); word-break:break-all; }}
 .task-list {{ list-style:none; padding-left:0; }}
 mark.seeme-hl {{ background:#FBBF24; color:#1F2937; border-radius:2px; padding:1px 2px; }}
-mark.seeme-cur {{ background:#3B82F6; color:#fff; }}
+mark.seeme-cur {{ background:var(--accent); color:#fff; }}
 /* 脚注（Markdig .UseFootnotes 输出）：上标锚点 + 底部注释列表 */
 sup.footnote-ref {{ font-size:.72em; margin-left:2px; }}
 sup.footnote-ref a {{ color:var(--link); text-decoration:none; }}
@@ -577,23 +360,41 @@ section.footnotes li p {{ display:inline; }}
 ::-webkit-scrollbar {{ width:8px; height:8px; }}
 ::-webkit-scrollbar-track {{ background:transparent; }}
 ::-webkit-scrollbar-thumb {{ background:var(--table-bdr); border-radius:4px; }}    ::-webkit-scrollbar-thumb:hover {{ background:var(--quote-text); }}
+.seeme-chart {{ width:100%; height:420px; margin:.6em 0; }}
+.seeme-markmap {{ width:100%; height:520px; margin:.6em 0; border:1px solid var(--table-bdr); border-radius:8px; overflow:hidden; }}
+.seeme-markmap svg {{ width:100%; height:100%; display:block; }}
+.seeme-markmap text {{ font-family:'Microsoft YaHei','PingFang SC',sans-serif; }}
+html.dark .seeme-markmap text {{ fill:var(--text); }}
+html.dark .seeme-markmap path {{ stroke:var(--secondary); }}
     ";
 
-            // Markdown 娓叉煋椋庢牸娉ㄥ叆锛坰imple / github 瑕嗙洊鍩虹鏍峰紡锛?
+            // Markdown 渲染风格注入口（simple / github 覆盖基础样式）
             switch (MdStyle)
             {
                 case "simple":
-                    css += "\nh1,h2 {{ border-bottom:none; }}\n.fm-card {{ display:none; }}\nblockquote {{ border-left-width:2px; }}\n";
+                    // 简约：去装饰、更大字距、内容加宽，一眼可辨
+                    css += "\nh1,h2 {{ border-bottom:none; }}\n.fm-card {{ display:none; }}\nblockquote {{ border-left-width:2px; }}\n"
+                         + "body {{ font-size:{FontSize + 1}px; line-height:{LineHeight + 0.15}; }}\n"
+                         + ".markdown-body {{ max-width:960px; margin:0 auto; }}\n"
+                         + "h1,h2,h3 {{ letter-spacing:.02em; }}\n"
+                         + "pre {{ border-radius:4px; border:1px solid var(--table-bdr); }}\n";
                     break;
                 case "github":
-                    css += "\n.markdown-body {{ max-width:880px; margin:0 auto; }}\n";
+                    // GitHub 风：880 居中 + 卡片式区块 + 标题分隔明显
+                    css += "\n.markdown-body {{ max-width:880px; margin:0 auto; padding:24px 32px; "
+                         + "background:var(--card-bg, transparent); border-radius:10px; border:1px solid var(--table-bdr); }}\n"
+                         + "h1 {{ border-bottom:2px solid var(--h1-border); }}\n"
+                         + "h2 {{ border-bottom:1px solid var(--h2-border); }}\n"
+                         + "blockquote {{ border-left-width:4px; }}\n"
+                         + "code {{ background:var(--code-bg); }}\n";
                     break;
             }
 
-            // 鎶ょ溂妯″紡锛氭殩鑹叉护闀溿?傛敞鎰忎笉鑳界敤 html/body 涓婄殑 filter鈥斺?旈偅浼氳 position:fixed 瀛愬厓绱?
-            // 锛堝弻鍑绘斁澶? lightbox锛夌殑瀹氫綅鍙傝?冧粠瑙嗗彛鍙樻垚鏁翠釜鏂囨。鐩掋?傛敼涓哄彧浣滅敤浜庡唴瀹瑰厓绱犮??
+            // 护眼模式：暖色滤镜。注意不能用 html/body 上的 filter——那会让 position:fixed 子元素
+            // （双击放大 lightbox）的定位参考从视口变成整个文档盒。改为只作用于内容元素。
+            // 强度调到肉眼可辨（sepia 0.35），暗色下同样加深。
             if (EyeCare)
-                css += "\nbody > *:not(#seeme-ov) {{ filter:sepia(.22) saturate(.88) brightness(1.02); }}\nhtml.dark body > *:not(#seeme-ov) {{ filter:sepia(.18) saturate(.8) brightness(.96); }}\n";
+                css += "\nbody > *:not(#seeme-ov) {{ filter:sepia(.35) saturate(.82) brightness(1.04) !important; }}\nhtml.dark body > *:not(#seeme-ov) {{ filter:sepia(.3) saturate(.78) brightness(.95) !important; }}\n";
 
             // 高亮标注 mark 样式 + 高亮笔光标 + 打印样式（@media print：白底黑字、隐藏元信息卡）
             css += @"
@@ -606,6 +407,11 @@ body.seeme-ann-active ::selection {{ background:#FDE68A; }}
   body {{ padding:0 !important; }}
   .fm-card {{ display:none !important; }}
   mark.seeme-hl, mark.seeme-ann {{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }}
+  /* PDF 导出开关：包含目录时，TOC 卡片在打印态显示，否则保留隐藏 */
+  body.pdf-toc .fm-card.toc-card {{ display:block !important; }}
+  body.pdf-toc .fm-card:not(.toc-card) {{ display:none !important; }}
+  /* 页码：Chromium 支持 @page @bottom-center 用 Paged Media 计数器 */
+  @page {{ @bottom-center {{ content: counter(page) "" / "" counter(pages); margin-bottom:12px; }} }}
 }}
 ";
 
@@ -661,31 +467,7 @@ body.seeme-ann-active ::selection {{ background:#FDE68A; }}
   }});
   document.addEventListener('keydown', function(e){{ if(e.key==='Escape') __ovClose(); }});
 }})();
-function setTheme(dark){{
-  var html=document.documentElement;
-  if(dark) html.classList.add('dark'); else html.classList.remove('dark');
-  // 浠ｇ爜楂樹寒涓婚鑱斿姩锛歱rism.min.css (浜?) 鈫? prism-tomorrow.min.css (鏆?)
-  var links=document.querySelectorAll('link[rel=stylesheet]');
-  for(var i=0;i<links.length;i++){{
-    var href=links[i].getAttribute('href')||'';
-    if(href.indexOf('prism.min.css')<0 && href.indexOf('prism-tomorrow.min.css')<0) continue;
-    var isDarkCss = href.indexOf('prism-tomorrow')>=0;
-    if(dark && !isDarkCss) links[i].setAttribute('href', href.replace('prism.min.css','prism-tomorrow.min.css'));
-    else if(!dark && isDarkCss) links[i].setAttribute('href', href.replace('prism-tomorrow.min.css','prism.min.css'));
-  }}
-  // Mermaid 图表跟随主题：保留原始源码，重新初始化并渲染
-  try {{
-    if(window.mermaid){{
-      document.querySelectorAll('.mermaid').forEach(function(el){{
-        if(!el.getAttribute('data-orig')) el.setAttribute('data-orig', el.innerHTML);
-        el.innerHTML = el.getAttribute('data-orig');
-        el.removeAttribute('data-processed');
-      }});
-      mermaid.initialize({{startOnLoad:false, theme: dark ? 'dark' : 'default'}});
-      mermaid.run({{nodes:document.querySelectorAll('.mermaid')}}).catch(function(e){{}});
-    }}
-  }}catch(e){{}}
-}}
+{SetThemeScript}
 ";
             string prismJs(string name) => $"https://{VirtualHost}/prism/prism-{name}.min.js";
             var prismCoreJs = prismJs("core");
@@ -704,6 +486,10 @@ function setTheme(dark){{
             var remoteImg = state.AllowRemoteImages ? " https:" : "";
             var nonce = NewNonce();
 
+            var echartsJsUrl = hasCharts ? $"<script src='https://{VirtualHost}/echarts/echarts.min.js'></script>\n" : "";
+            var chartInit = hasCharts ? $"<script nonce='{nonce}'>{ChartInitScript}</script>\n" : "";
+            var markmapInit = hasMarkmaps ? $"<script type='module' nonce='{nonce}'>{MarkmapInitScript}</script>\n" : "";
+
             // 高亮标注：按当前文件路径取存储的标注，随页面加载按文本重新包裹
             var annData = (HighlightStore?.ForFile(state.CurrentFile ?? "") ?? Array.Empty<HighlightItem>())
                 .Select(i => new { i.Id, i.Text, i.Note }).ToList();
@@ -713,7 +499,7 @@ function setTheme(dark){{
 <html{htmlClass}><head><meta charset='utf-8'/>
 <meta name='viewport' content='width=device-width,initial-scale=1'/>
 <meta name='referrer' content='no-referrer'/>
-<meta http-equiv='Content-Security-Policy' content=""default-src 'self' https://appassets.example; script-src 'nonce-{nonce}' https://appassets.example; style-src 'unsafe-inline' https://appassets.example; img-src 'self' data: https://appassets.example{remoteImg}; font-src 'self' data: https://appassets.example;"">
+<meta http-equiv='Content-Security-Policy' content=""default-src 'self' https://appassets.example; script-src 'nonce-{nonce}' https://appassets.example; style-src 'unsafe-inline' https://appassets.example; img-src 'self' data: https://appassets.example{remoteImg}; font-src 'self' data: https://appassets.example; base-uri 'self'; form-action 'none';"">
 <link rel='stylesheet' href='{prismTheme}'/>
 <link rel='stylesheet' href='{katexCssUrl}'/>
 <style>{css}</style>
@@ -735,233 +521,14 @@ function setTheme(dark){{
 <script src='{katexJsUrl}'></script>
 <script src='{autoRenderJsUrl}'></script>
 <script src='{mermaidJsUrl}'></script>
+{echartsJsUrl}{chartInit}{markmapInit}
 <script nonce='{nonce}'>{scrollScript}</script>
 <script nonce='{nonce}'>{SearchScript}</script>
 <script nonce='{nonce}'>{annotationScript}</script>
+<script nonce='{nonce}'>{KeyBridgeScript}</script>
 </body></html>";
         }
 
-        public string BuildOfficePage(string bodyHtml, PanelState state,
-            FrameworkElement resourceElement)
-        {
-            var isDark = IsDark();
-
-            // 鍙屽鍥哄畾鍊硷細:root 鎭掍寒鑹层?乭tml.dark 鎭掓殫鑹诧紙ThemeVars 鍞竴璋冭壊鏉匡級锛屼繚璇佷换鎰忎富棰樹笅鐢熸垚椤甸潰鍧囧彲鍙屽悜鍒囨崲
-            var css = $@"
-{ThemeCss()}
-
-* {{ margin:0; padding:0; box-sizing:border-box; }}
-html,body {{ background:var(--bg); color:var(--text); font-family:'Microsoft YaHei','PingFang SC',sans-serif; }}
-{(EyeCare ? "body > * {{ filter:sepia(.22) saturate(.88) brightness(1.02); }} html.dark body > * {{ filter:sepia(.18) saturate(.8) brightness(.96); }}" : "")}
-body {{ line-height:{LineHeight.ToString(System.Globalization.CultureInfo.InvariantCulture)}; font-size:{FontSize.ToString(System.Globalization.CultureInfo.InvariantCulture)}px; padding:16px 20px 40px; transition:background-color .3s ease,color .3s ease; }}
-.content {{
-  max-width:100%;
-}}
-{MdDocumentCss}
-.page-break {{
-  text-align:center; margin:32px 0; position:relative;
-}}
-.page-break::before {{
-  content:''; position:absolute; top:50%; left:0; right:0;
-  height:1px; background:var(--border);
-}}
-.page-break span {{
-  background:var(--bg); padding:0 16px; position:relative;
-  font-size:12px; color:var(--secondary);
-}}
-.pdf-line {{
-    background:transparent !important;
-    border:none !important;
-    margin:0 !important;
-    padding:0 !important;
-    display:inline !important;
-}}
-.pdf-line + .pdf-line {{
-    display:block !important;
-    margin-bottom:0.6em !important;
-}}
-.pdf-code {{
-    display:block !important;
-    background:var(--code-bg) !important;
-    padding:8px 12px !important;
-    border-radius:6px !important;
-    margin:0.5em 0 !important;
-    font-family:'Consolas','JetBrains Mono',monospace !important;
-    font-size:.86em !important;
-    line-height:{LineHeight.ToString(System.Globalization.CultureInfo.InvariantCulture)} !important;
-    overflow-x:auto !important;
-    white-space:pre !important;
-}}
-.sheet-title {{ font-size:1.1em; color:var(--heading); font-weight:600; margin:12px 0 6px; padding-bottom:4px; border-bottom:1px solid var(--border); }}
-.excel-table {{ border-collapse:collapse; width:100%; font-size:.9em; margin:0; }}
-.excel-table th,.excel-table td {{ border:1px solid var(--border); padding:4px 10px; white-space:nowrap; }}
-.excel-table th {{ background:var(--card); font-weight:600; color:var(--heading); position:sticky; top:0; }}
-.excel-table tr:nth-child(even) td {{ background:var(--row-hov); }}
-html.dark .excel-table tr:nth-child(even) td {{ background:rgba(255,255,255,.03); }}
-.excel-table tr:hover td {{ background:rgba(0,0,0,.04); }}
-html.dark .excel-table tr:hover td {{ background:rgba(255,255,255,.06); }}
-.ppt-slide {{ background:var(--card); border:1px solid var(--border); border-radius:10px; margin:0 0 14px; overflow:hidden; }}
-.ppt-slide-header {{ background:var(--bg); padding:7px 14px; font-size:.78em; font-weight:600; color:var(--heading); border-bottom:1px solid var(--border); }}
-.ppt-slide-body {{ padding:10px 16px 12px; }}
-.ppt-text {{ margin:.25em 0; line-height:{LineHeight.ToString(System.Globalization.CultureInfo.InvariantCulture)}; font-size:.95em; }}
-.error-msg {{ color:var(--danger); }}
-.empty-msg {{ color:var(--text); opacity:.5; font-style:italic; }}
-::-webkit-scrollbar {{ width:8px; height:8px; }}
-::-webkit-scrollbar-track {{ background:transparent; }}
-::-webkit-scrollbar-thumb {{ background:var(--border); border-radius:4px; }}
-::-webkit-scrollbar-thumb:hover {{ background:var(--secondary); }}
-mark.seeme-ann {{ background:#FDE68A; color:#1F2937; border-radius:2px; padding:1px 2px; cursor:pointer; }}
-html.dark mark.seeme-ann {{ background:#B45309; color:#FDE68A; }}
-body.seeme-ann-active {{ cursor:text; }}
-body.seeme-ann-active ::selection {{ background:#FDE68A; }}
-@media print {{
-html, body {{ background:#fff !important; color:#000 !important; }}
-body {{ padding:0 !important; }}
-mark.seeme-hl, mark.seeme-ann {{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }}
-}}
-";
-        var htmlClass = isDark ? " class='dark'" : "";
-        var nonce = NewNonce();
-
-        // 高亮标注：按当前文件路径取存储的标注，随页面加载按文本重新包裹
-        var annData = (HighlightStore?.ForFile(state.CurrentFile ?? "") ?? Array.Empty<HighlightItem>())
-            .Select(i => new { i.Id, i.Text, i.Note }).ToList();
-        var annotationScript = BuildAnnotationScript(System.Text.Json.JsonSerializer.Serialize(annData));
-
-        return $@"<!DOCTYPE html>
-<html{htmlClass}>
-<head>
-<meta charset='utf-8'>
-<meta name='viewport' content='width=device-width,initial-scale=1'>
-<meta name='referrer' content='no-referrer'/>
-<meta http-equiv='Content-Security-Policy' content=""default-src 'self' https://appassets.example; script-src 'nonce-{nonce}' https://appassets.example; style-src 'unsafe-inline'; img-src 'self' data: https://appassets.example;"">
-<style>{css}</style>
-<script src=""https://appassets.example/scripts/office-theme.js""></script>
-<script nonce='{nonce}'>window.setTheme=function(dark){{var d=!!dark;document.documentElement.classList.toggle('dark',d);if(document.body)document.body.classList.toggle('dark',d);}};</script>
-</head>
-<body>
-  <div class='content'>
-    {bodyHtml}
-  </div>
-<script nonce='{nonce}'>{SearchScript}</script>
-<script nonce='{nonce}'>{annotationScript}</script>
-</body>
-</html>";
-        }
-
-        /// <summary>
-        /// 绌虹櫧椤垫樉绀哄彲鍏抽棴鐨勬杩庢彁绀哄皬鍗＄墖锛堝彸涓嬭娴姩锛夛紝鏀寔"涓嶅啀鏄剧ず"锛堟寔涔呭寲鍒? settings.json锛夈??
-        /// </summary>
-        public string BuildWelcomePage(FrameworkElement resourceElement)
-        {
-            var isDark = IsDark();
-
-            // 鍙屽鍥哄畾鍊硷細:root 鎭掍寒鑹层?乭tml.dark 鎭掓殫鑹诧紙ThemeVars 鍞竴璋冭壊鏉匡級锛屼繚璇佷换鎰忎富棰樹笅鐢熸垚椤甸潰鍧囧彲鍙屽悜鍒囨崲
-            var htmlClass = isDark ? " class='dark'" : "";
-            var nonce = NewNonce();
-
-            return $@"<!DOCTYPE html>
-<html{htmlClass}>
-<head>
-<meta charset='utf-8'>
-<meta name='viewport' content='width=device-width,initial-scale=1'>
-<meta name='referrer' content='no-referrer'/>
-<style>
-{ThemeCss()}
-* {{ margin:0; padding:0; box-sizing:border-box; }}
-html,body {{ height:100%; background:var(--bg); }}
-body {{
-  background:var(--bg); color:var(--text);
-  font-family:'Microsoft YaHei','PingFang SC',system-ui,sans-serif;
-  transition:background-color .15s ease,color .15s ease;
-}}
-#tip {{
-  position:fixed; left:50%; bottom:28px; transform:translateX(-50%); width:320px;
-  background:var(--card); border:1px solid var(--border); border-radius:12px;
-  box-shadow:0 8px 32px rgba(0,0,0,0.10);
-  padding:14px 16px 10px;
-  cursor:pointer;
-  transition:background-color .15s ease,border-color .15s ease;
-}}
-#tip:hover {{ border-color:var(--accent); }}
-html.dark #tip {{ box-shadow:0 8px 32px rgba(0,0,0,0.35); }}
-.tip-head {{ display:flex; align-items:center; gap:10px; margin-bottom:10px; }}
-h2 {{ font-size:14px; font-weight:600; color:var(--heading); flex:1; }}
-.empty {{
-  position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
-  pointer-events:none;
-}}
-.empty-box {{
-  display:flex; flex-direction:column; align-items:center; gap:10px;
-  padding:44px 30px; border:1.5px dashed var(--border); border-radius:18px;
-}}  .empty-icon {{ display:flex; opacity:.6; }}
-.empty-title {{ font-size:18px; font-weight:600; color:var(--secondary); }}
-.empty-hint {{ font-size:12px; color:var(--secondary); opacity:.85; }}
-.close {{
-  border:none; background:transparent; color:var(--secondary); font-size:16px; line-height:1;
-  cursor:pointer; padding:2px 6px; border-radius:6px;
-}}
-.close:hover {{ background:var(--bg); color:var(--heading); }}
-.tip-body {{ font-size:12px; line-height:2; color:var(--secondary); }}
-.tip-body kbd {{
-  font-family:'Consolas',monospace; font-size:11px; padding:2px 6px; border-radius:5px;
-  background:var(--bg); border:1px solid var(--border); color:var(--heading);
-  min-width:64px; text-align:center; display:inline-block; margin-right:10px;
-}}
-.tip-foot {{ display:flex; justify-content:flex-end; margin-top:10px; }}
-.tip-foot button {{
-  border:1px solid var(--border); background:transparent; color:var(--secondary);
-  font-size:11px; cursor:pointer; padding:4px 10px; border-radius:6px;
-  transition:background-color .15s ease,border-color .15s ease,color .15s ease;
-}}
-.tip-foot button:hover {{ background:var(--bg); border-color:var(--accent); color:var(--heading); text-decoration:none; }}
-</style>
-</head>
-<body>
-  <div class='empty'>
-    <div class='empty-box'>
-      <div class='empty-icon'>
-        <svg width='46' height='46' viewBox='0 0 46 46' fill='none'
-             stroke='var(--border)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>
-          <circle cx='23' cy='23' r='20'/>
-          <path d='M23 31 V15 M16 22 L23 15 L30 22'/>
-        </svg>
-      </div>
-      <div class='empty-title'>鏈?夋嫨</div>
-      <div class='empty-hint'>拖拽文件到此 · Ctrl+O 打开</div>
-    </div>
-  </div>
-  <div id='tip' title='点击打开文件'>
-    <div class='tip-head'>
-      <h2>欢迎使用 SeeMe</h2>
-      <button id='tipClose' class='close' title='关闭提示'>×</button>
-    </div>
-    <div class='tip-body'>
-      <div><kbd>Ctrl+O</kbd>打开文件</div>
-      <div><kbd>Ctrl+F</kbd>查找</div>
-      <div><kbd>Ctrl+0/+/鈭?</kbd>缂╂斁</div>
-    </div>
-    <div class='tip-foot'>
-      <button id='tipNever'>不再显示</button>
-    </div>
-  </div>
-<script nonce='{nonce}'>
-function setTheme(dark){{if(dark)document.documentElement.classList.add('dark');else document.documentElement.classList.remove('dark');}}
-function dismiss(){{var t=document.getElementById('tip');if(t)t.style.display='none';}}
-function openFile(){{
-  try{{if(window.chrome&&chrome.webview)chrome.webview.postMessage(JSON.stringify({{kind:'open-file'}}));}}catch(e){{}}
-}}
-function dismissForever(){{
-  try{{if(window.chrome&&chrome.webview)chrome.webview.postMessage(JSON.stringify({{kind:'dismiss-welcome'}}));}}catch(e){{}}
-  dismiss();
-}}
-document.getElementById('tip').addEventListener('click', openFile);
-document.getElementById('tipClose').addEventListener('click', function(e){{e.stopPropagation();dismiss();}});
-document.getElementById('tipNever').addEventListener('click', function(e){{e.stopPropagation();dismissForever();}});
-</script>
-</body>
-</html>";
-        }
     }
 
     /// <summary>鏂囨。澶х翰鏉＄洰锛歁arkdig 娓叉煋鍚庢爣棰樼殑鐪熷疄 id锛堥敋鐐硅烦杞洰鏍囷級涓庣函鏂囨湰鏍囬銆?</summary>
