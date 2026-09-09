@@ -4,50 +4,40 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Text.Json;
+using System.Linq;
 
 namespace SeeMe
 {
-    public class FileHistory : IFileHistory
+    /// <summary>
+    /// 最近文件历史：按打开顺序倒序保存，上限可调。
+    /// 存储于 %LOCALAPPDATA%\SeeMe\history.json；只保留磁盘上仍存在的文件。
+    /// 构造器可注入自定义存储路径（测试隔离用），默认走真实 LocalApplicationData。
+    /// </summary>
+    public class FileHistory : JsonListStore<string>, IFileHistory
     {
         private const int DefaultMaxEntries = 15;
         /// <summary>历史上限（可在设置中调整），改小会自动裁剪。</summary>
         public int MaxEntries { get; private set; } = DefaultMaxEntries;
-        private static readonly string StoragePath =
+
+        private static string DefaultStoragePath =>
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SeeMe", "history.json");
 
-        private readonly List<string> _entries = new();
-
-        public IReadOnlyList<string> Entries => _entries.AsReadOnly();
+        public IReadOnlyList<string> Entries => _items.AsReadOnly();
 
         public event Action? Changed;
 
-        public static FileHistory Load()
-        {
-            var history = new FileHistory();
-            try
-            {
-                var dir = Path.GetDirectoryName(StoragePath);
-                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                    Directory.CreateDirectory(dir);
+        public FileHistory(string? storagePath = null) : base(storagePath ?? DefaultStoragePath, "FileHistory") { }
 
-                if (File.Exists(StoragePath))
-                {
-                    var json = File.ReadAllText(StoragePath);
-                    var list = JsonSerializer.Deserialize<List<string>>(json);
-                    if (list != null)
-                    {
-                        foreach (var p in list)
-                        {
-                            if (File.Exists(p) && !history._entries.Contains(p))
-                                history._entries.Add(p);
-                        }
-                    }
-                }
-            }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[SeeMe] FileHistory.Load: " + ex.Message); }
+        public static FileHistory Load(string? storagePath = null)
+        {
+            var history = new FileHistory(storagePath);
+            history.LoadFromDisk();
             return history;
         }
+
+        /// <summary>合法条目：文件仍存在且未重复。</summary>
+        protected override bool CanIngest(string p)
+            => File.Exists(p) && !_items.Contains(p);
 
         public void Add(string path)
         {
@@ -57,11 +47,11 @@ namespace SeeMe
             }
             catch { return; }
 
-            _entries.Remove(path);
-            _entries.Insert(0, path);
+            _items.Remove(path);
+            _items.Insert(0, path);
 
-            while (_entries.Count > MaxEntries)
-                _entries.RemoveAt(_entries.Count - 1);
+            while (_items.Count > MaxEntries)
+                _items.RemoveAt(_items.Count - 1);
 
             Save();
             Changed?.Invoke();
@@ -75,14 +65,14 @@ namespace SeeMe
             }
             catch { return; }
 
-            _entries.Remove(path);
+            _items.Remove(path);
             Save();
             Changed?.Invoke();
         }
 
         public void Clear()
         {
-            _entries.Clear();
+            _items.Clear();
             Save();
             Changed?.Invoke();
         }
@@ -93,26 +83,13 @@ namespace SeeMe
             if (max < 1) return;
             MaxEntries = max;
             var trimmed = false;
-            while (_entries.Count > MaxEntries)
+            while (_items.Count > MaxEntries)
             {
-                _entries.RemoveAt(_entries.Count - 1);
+                _items.RemoveAt(_items.Count - 1);
                 trimmed = true;
             }
             if (trimmed) Save();
             Changed?.Invoke();
-        }
-
-        private void Save()
-        {
-            try
-            {
-                var dir = Path.GetDirectoryName(StoragePath);
-                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                    Directory.CreateDirectory(dir);
-                var json = JsonSerializer.Serialize(_entries, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(StoragePath, json);
-            }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[SeeMe] FileHistory.Save: " + ex.Message); }
         }
     }
 }

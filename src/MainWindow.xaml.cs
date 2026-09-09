@@ -4,8 +4,10 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Security;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -35,6 +37,8 @@ namespace SeeMe
         private IBookmarkStore _bookmarks = null!;
         private IHighlightStore _highlights = null!;
         private INoteStore _notes = null!;
+        /// <summary>独立命令面板窗口（不挂在主窗内，避免遮住阅读区）。</summary>
+        private CommandPaletteWindow? _paletteWindow;
         private string _searchFilter = "";
         /// <summary>用户自定义 CSS 文件路径（null=未启用）。读取失败时回退空。</summary>
         private string? _customCssPath;
@@ -53,6 +57,7 @@ namespace SeeMe
         {
             InitializeComponent();
             SetWindowIcon();
+            _paletteWindow = new CommandPaletteWindow(this);
 
             // 全局单例主题：App.OnStartup 已初始化，所有窗口共享（多窗口切换主题互相跟随）。
             // 窗口显示前首次合入目标主题字典——若放到 OnLoaded（窗口已显示），Window.Background 等
@@ -348,6 +353,8 @@ namespace SeeMe
             AppSettings.Set(AppSettings.MdStyleKey, style);
             if (_render is RenderService rs) rs.MdStyle = style;
             ReloadOpenPanels();
+            if (StatusText != null)
+                StatusText.Text = "已应用 Markdown 渲染风格：" + style;
         }
 
         /// <summary>护眼模式开关，持久化并重渲染（暖色滤镜作用于所有 HTML 预览页）。</summary>
@@ -356,6 +363,8 @@ namespace SeeMe
             AppSettings.Set(AppSettings.EyeCareKey, on);
             if (_render is RenderService rs) rs.EyeCare = on;
             ReloadOpenPanels();
+            if (StatusText != null)
+                StatusText.Text = on ? "已开启护眼模式" : "已关闭护眼模式";
         }
 
         /// <summary>动画效果开关（主题切换过渡动画）。</summary>
@@ -400,6 +409,53 @@ namespace SeeMe
 
         /// <summary>当前动画开关（设置对话框读回用）。</summary>
         public bool ThemeAnimationsEnabled => _theme.AnimationsEnabled;
+
+        /// <summary>当前活动面板的文件名（导出对话框默认文件名）。</summary>
+        public string? CurrentFileName
+        {
+            get
+            {
+                var p = _activePanel ?? _app?.Left;
+                return p?.CurrentFile != null ? System.IO.Path.GetFileNameWithoutExtension(p.CurrentFile) : null;
+            }
+        }
+
+        /// <summary>
+        /// 导出当前活动面板为 PDF：注入 TOC / 页码 / 水印相关 CSS class 到页面 body，
+        /// 调 WebView2.PrintToPdfAsync 静默输出，完成后移除注入样式（恢复浏览状态）。
+        /// 失败抛异常由调用方提示。
+        /// </summary>
+        public async void ExportActivePanelToPdf(string filePath, bool includeToc, bool showPageNumber, bool enableWatermark, string watermarkText)
+        {
+            var panel = _activePanel ?? _app?.Left;
+            var wb = panel?.WebView?.CoreWebView2;
+            if (wb == null) throw new InvalidOperationException("没有可导出的活动文档");
+            // 1. 构造开关脚本：按设置给 body 加 class + 注入水印文字（转义防注入）
+            var escText = SecurityElement.Escape(watermarkText ?? "");
+            var sb = new StringBuilder("(function(){try{");
+            sb.Append("var b=document.body;if(!b)return;");
+            sb.Append($"b.classList.toggle('pdf-toc',{includeToc.ToString().ToLowerInvariant()});");
+            sb.Append($"b.classList.toggle('pdf-pageno',{showPageNumber.ToString().ToLowerInvariant()});");
+            sb.Append($"b.classList.toggle('pdf-watermark',{enableWatermark.ToString().ToLowerInvariant()});");
+            sb.Append($"var old=document.getElementById('__seeme_pdf_wm');if(old)old.remove();");
+            if (enableWatermark && !string.IsNullOrEmpty(watermarkText))
+            {
+                sb.Append($"var s=document.createElement('style');s.id='__seeme_pdf_wm';s.textContent='@media print{{body.pdf-watermark::before{{content:\"{escText}\";position:fixed;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-30deg);font-size:140px;color:rgba(0,0,0,.08);z-index:9999;pointer-events:none;}}}}';");
+                sb.Append("document.head.appendChild(s);");
+            }
+            sb.Append("}catch(e){}})();");
+            await wb.ExecuteScriptAsync(sb.ToString());
+            // 2. 静默打印到 PDF
+            try
+            {
+                await wb.PrintToPdfAsync(filePath, null);
+            }
+            finally
+            {
+                // 3. 恢复浏览态：清掉所有 class 和水印 style
+                await wb.ExecuteScriptAsync("(function(){try{var b=document.body;if(b){b.classList.remove('pdf-toc');b.classList.remove('pdf-pageno');b.classList.remove('pdf-watermark');}var s=document.getElementById('__seeme_pdf_wm');if(s)s.remove();}catch(e){}})();");
+            }
+        }
 
         /// <summary>重渲染当前打开的两个面板（设置变更后同步预览）。</summary>
         private void ReloadOpenPanels()
@@ -533,6 +589,7 @@ namespace SeeMe
             _bookmarks.Changed += RefreshRecentFilesList;
 
             _highlights = HighlightStore.Load();
+            _highlights.Changed += OnHighlightsChanged;
             _render.HighlightStore = _highlights;
 
             _notes = NoteStore.Load();
@@ -755,11 +812,199 @@ window.addEventListener('drop',function(e){
             UpdateSplitAutoHide();
         }
 
+        /// <summary>演示/专注模式（F11）：隐藏左右栏让当前文档占满视口，Esc/F11 还原。Sumatra 演示模式启发。</summary>
+        private bool _presentationOn;
+        private bool _presInfoVisible;
+        private bool _presNotesVisible;
+
+        private void TogglePresentation()
+        {
+            try
+            {
+                var hasFile = (ActiveOrLeft?.CurrentFile != null) || (_app?.Right?.CurrentFile != null);
+                if (!_presentationOn && !hasFile)
+                {
+                    StatusText.Text = "没有打开的文档";
+                    return;
+                }
+                _presentationOn = !_presentationOn;
+                if (_presentationOn)
+                {
+                    _presInfoVisible = InfoPanel.Visibility == Visibility.Visible;
+                    _presNotesVisible = NotesPanel != null && NotesPanel.Visibility == Visibility.Visible;
+                    LeftNavCol.Width = new GridLength(0);
+                    InfoPanelCol.Width = new GridLength(0);
+                    InfoPanel.Visibility = Visibility.Collapsed;
+                    if (NotesPanel != null) NotesPanel.Visibility = Visibility.Collapsed;
+                    // 内容面板进入专注态：清空活动面板选择视觉
+                    _activePanel = null;
+                    UpdateActivePanelVisual();
+                    StatusText.Text = "演示模式：文档占满视口 · F11 退出（Esc 退出文档区选择）";
+                }
+                else
+                {
+                    LeftNavCol.Width = new GridLength(195);
+                    InfoPanelCol.Width = new GridLength(190);
+                    InfoPanel.Visibility = _presInfoVisible ? Visibility.Visible : Visibility.Collapsed;
+                    if (NotesPanel != null)
+                        NotesPanel.Visibility = _presNotesVisible ? Visibility.Visible : Visibility.Collapsed;
+                    UpdateRightPanelColWidth();
+                    UpdateWindowTitle();
+                    StatusText.Text = "已退出演示模式";
+                }
+            }
+            catch (Exception ex) { LogErr("TogglePresentation: " + ex.Message); }
+        }
+
+        /// <summary>
+        /// 键盘流是否可激活：无修饰键、焦点不在文本/列表等会消费方向键的控件、
+        /// 当前面板打开了文件且不在编辑模式（编辑页 textarea 需要 ↑↓←→ 与 Enter）。
+        /// </summary>
+        private bool QuickNavAllowed()
+        {
+            var mods = Keyboard.Modifiers;
+            if (mods.HasFlag(ModifierKeys.Control) || mods.HasFlag(ModifierKeys.Shift) || mods.HasFlag(ModifierKeys.Alt))
+                return false;
+            if (_paletteWindow != null && _paletteWindow.IsVisible) return false;
+            if (Keyboard.FocusedElement is System.Windows.Controls.Primitives.TextBoxBase
+                or System.Windows.Controls.ComboBox or ListBox or ListView or System.Windows.Controls.TreeView
+                or System.Windows.Controls.DataGrid or System.Windows.Controls.DataGridCell)
+                return false;
+            var p = _activePanel ?? _app?.Left;
+            return p != null && !p.EditMode && !string.IsNullOrEmpty(p.CurrentFile) && File.Exists(p.CurrentFile);
+        }
+
+        /// <summary>当前活动文件在最近文件（MRU，最新在前）中的浏览索引（无则 -1）。</summary>
+        private int ActiveFileHistoryIndex()
+        {
+            var p = _activePanel ?? _app?.Left;
+            if (p?.CurrentFile == null) return -1;
+            var list = _app?.History.Entries;
+            if (list == null || list.Count == 0) return -1;
+            try
+            {
+                var cur = Path.GetFullPath(p.CurrentFile);
+                for (var i = 0; i < list.Count; i++)
+                {
+                    if (string.Equals(Path.GetFullPath(list[i]), cur, StringComparison.OrdinalIgnoreCase)) return i;
+                }
+            }
+            catch { }
+            return -1;
+        }
+
+        /// <summary>键盘流 ←/→：沿最近文件列表前后切换（到头停止），QuickLook 方向键浏览文件语义。</summary>
+        private void StepRecentFile(int dir)
+        {
+            try
+            {
+                var p = ActiveOrLeft;
+                if (p == null || p.EditMode) return;
+                var list = _app.History.Entries;
+                if (list == null || list.Count == 0) return;
+                var idx = ActiveFileHistoryIndex();
+                if (idx < 0) idx = 0;
+                else idx = Math.Clamp(idx + dir, 0, list.Count - 1);
+                var next = list[idx];
+                if (next == null || !File.Exists(next)) return;
+                if (string.Equals(next, p.CurrentFile, StringComparison.OrdinalIgnoreCase)) return;
+                p.LastScrollY = 0; // 切换目标文件时清除上一文件的滚动缓存，新文件从头显示
+                OpenFileInternal(p, next);
+                StatusText.Text = $"历史 {idx + 1}/{list.Count} · {Path.GetFileName(next)}（←→ 切换，Enter 系统打开）";
+            }
+            catch (Exception ex) { LogErr("StepRecentFile: " + ex.Message); }
+        }
+
+        /// <summary>键盘流 Enter：用系统默认程序打开当前预览的文件（快速转正式编辑/阅读）。</summary>
+        private void OpenActiveWithDefaultApp()
+        {
+            try
+            {
+                var p = ActiveOrLeft;
+                if (p?.CurrentFile == null || !File.Exists(p.CurrentFile)) return;
+                Process.Start(new ProcessStartInfo { FileName = p.CurrentFile, UseShellExecute = true });
+                StatusText.Text = "已在默认程序中打开: " + Path.GetFileName(p.CurrentFile);
+            }
+            catch (Exception ex) { LogErr("OpenActiveWithDefaultApp: " + ex.Message); }
+        }
+
+        public void ApplyCurrentThemeToWindow(Window w)
+        {
+            try { _theme?.ApplyToWindow(w, _theme.Current); }
+            catch (Exception ex) { LogErrPublic("ApplyThemeToWindow: " + ex.Message); }
+        }
+
+        /// <summary>独立命令面板（Topmost 浮窗）开关入口。</summary>
+        private void TogglePaletteWindow()
+        {
+            if (_paletteWindow == null) _paletteWindow = new CommandPaletteWindow(this);
+            _paletteWindow.Toggle();
+        }
+
+        /// <summary>状态栏「命令」按钮入口（XAML Click）。</summary>
+        private void OnPaletteButton(object sender, RoutedEventArgs e)
+        {
+            TogglePaletteWindow();
+        }
+
+        // ════════ 给独立命令面板窗口 CommandPaletteWindow 调用的转发公开方法（私有方法不暴露） ════════
+
+        public void ShowOpenForForActive() { if (_activePanel != null) ShowOpenFor(_activePanel); else if (_app.Left != null) ShowOpenFor(_app.Left); }
+        public void OpenActiveWithDefaultAppPublic() => OpenActiveWithDefaultApp();
+        public void RefreshActivePanel()
+        {
+            var t = ActiveOrLeft;
+            if (t != null && !string.IsNullOrEmpty(t.CurrentFile))
+                _ = ReloadFileAsync(t, true, t.ResetCts());
+        }
+        public void ToggleThemePublic() => OnThemeToggle(this, new RoutedEventArgs());
+        public void ToggleSplit() => SetSplitMode(!_app.IsSplitMode);
+        /// <summary>确保右侧分栏存在（分栏模式关闭时先开启）——向右栏投递文件的公共前置。</summary>
+        private void EnsureRightPanel()
+        {
+            if (!_app.IsSplitMode) SetSplitMode(true);
+        }
+        /// <summary>主题化弹窗外壳样板（唯一来源）：公共窗口属性 → 合入主题字典 → build 填充内容 → 模态显示。
+        /// Title/Width/Height/Background 等差异项由调用方在 win 初始化器里自设。</summary>
+        private void ShowThemedDialog(Window win, Action<Window> build)
+        {
+            win.Owner = this;
+            win.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+            win.ResizeMode = ResizeMode.NoResize;
+            // 合入主题字典：独立 Window 的 DynamicResource 需经 ApplyToWindow 才能解析到主题资源
+            _theme.ApplyToWindow(win, _theme.Current);
+            build(win);
+            win.ShowDialog();
+        }
+        public void TogglePresentationPublic() => TogglePresentation();
+        /// <summary>当前激活面板，未激活（如收起分栏后）回退左栏——命令面板统一入口。</summary>
+        public PanelState? ActiveOrLeft => _activePanel ?? _app.Left;
+        public void ToggleCommandPalette() => TogglePaletteWindow();
+        public void OpenFileInto(PanelState t, string path)
+        {
+            if (t != null && !string.IsNullOrEmpty(path) && File.Exists(path))
+                OpenFileInternal(t, path);
+        }
+        public void ShowFindFor(PanelState t) { if (t != null) ShowFind(t); }
+        public void SetZoomActive(double scale) { var t = ActiveOrLeft; if (t != null) SetZoom(t, scale); }
+        public void SetZoomActiveDelta(double delta) { var t = ActiveOrLeft; if (t != null) SetZoom(t, Math.Clamp(t.FontScale + delta, 0.5, 2.5)); }
+        public void ToggleInfoPanel() => OnToggleInfoPanel(this, new RoutedEventArgs());
+        public void ToggleNotesPanel() => SetNotesPanelVisibility(true);
+        public void ToggleHighlightPen() { var t = ActiveOrLeft; if (t != null) ToggleAnnMode(t); }
+        public void ActivateSideTabPublic(int idx) => ActivateSideTab(idx);
+        public void ToggleEditModePublic() { var t = ActiveOrLeft; if (t != null && CanEditFile(t.CurrentFile)) ToggleEditMode(t); }
+        public void PrintActivePanelPublic() => PrintActivePanel();
+        public void ExportActiveToImage() => OnExportImage(this, new RoutedEventArgs());
+        public void ShowExportDialogForActive() { var t = ActiveOrLeft; if (t != null) ShowExportDialog(t); }
+        public void OpenFileIntoActive(string path) { var t = ActiveOrLeft; if (t != null) OpenFileInto(t, path); }
+        public System.Collections.Generic.IReadOnlyList<string> GetHistoryEntries() => _app?.History.Entries ?? Array.Empty<string>();
+        public void LogErrPublic(string msg) => LogErr(msg);
+
         private void OnWindowKeyDown(object sender, KeyEventArgs e)
         {
             if (e.Key == Key.F5)
             {
-                var target = _activePanel ?? _app.Left;
+                var target = ActiveOrLeft;
                 if (target != null && !string.IsNullOrEmpty(target.CurrentFile))
                 {
                     _ = ReloadFileAsync(target, true, target.ResetCts());
@@ -773,6 +1018,16 @@ window.addEventListener('drop',function(e){
 
             var ctrl = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
             var shift = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
+
+            // Ctrl+Shift+P：开关独立命令面板窗口（VS Code 同款——避开 WebView2 Chromium 抢 Ctrl+K 调搜索栏）
+            if (ctrl && shift && e.Key == Key.P)
+            {
+                TogglePaletteWindow();
+                e.Handled = true;
+                return;
+            }
+            // 命令面板打开时：其余键交给窗口自身处理
+            if (_paletteWindow != null && _paletteWindow.IsVisible) return;
 
             if (ctrl && e.Key == Key.O)
             {
@@ -802,7 +1057,7 @@ window.addEventListener('drop',function(e){
             }
             else if (ctrl && e.Key == Key.F)
             {
-                var tgt = _activePanel ?? _app.Left;
+                var tgt = ActiveOrLeft;
                 if (tgt != null) ShowFind(tgt);
                 e.Handled = true;
             }
@@ -814,12 +1069,12 @@ window.addEventListener('drop',function(e){
             }
             else if (ctrl && e.Key == Key.D0)
             {
-                SetZoom(_activePanel ?? _app.Left, 1.0);
+                SetZoomActive(1.0);
                 e.Handled = true;
             }
             else if (ctrl && (e.Key == Key.Add || e.Key == Key.OemPlus || e.Key == Key.Subtract || e.Key == Key.OemMinus))
             {
-                var tgt = _activePanel ?? _app.Left;
+                var tgt = ActiveOrLeft;
                 if (tgt != null)
                 {
                     double step = 0.1;
@@ -834,9 +1089,30 @@ window.addEventListener('drop',function(e){
                 UpdateActivePanelVisual();
                 e.Handled = true;
             }
+            // 键盘流（QuickLook 式）：无修饰键 ←/→ 在最近历史文件间切换预览，Enter 用系统默认程序打开当前文件
+            else if (QuickNavAllowed() && e.Key == Key.Left)
+            {
+                StepRecentFile(-1);
+                e.Handled = true;
+            }
+            else if (QuickNavAllowed() && e.Key == Key.Right)
+            {
+                StepRecentFile(1);
+                e.Handled = true;
+            }
+            else if (QuickNavAllowed() && e.Key == Key.Enter)
+            {
+                OpenActiveWithDefaultApp();
+                e.Handled = true;
+            }
+            else if (!ctrl && !shift && e.Key == Key.F11)
+            {
+                TogglePresentation();
+                e.Handled = true;
+            }
             else if (e.Key == Key.F12 && AppSettings.Get(AppSettings.DevToolsKey, false))
             {
-                var tgt = _activePanel ?? _app.Left;
+                var tgt = ActiveOrLeft;
                 if (tgt?.WebView?.CoreWebView2 != null)
                 {
                     tgt.WebView.CoreWebView2.OpenDevToolsWindow();
@@ -895,7 +1171,15 @@ window.addEventListener('drop',function(e){
                         LogWarn("Blocked doc-host resource: " + ea.Request.Uri);
                     }
                 }
-                catch { /* 解析失败不拦截，避免误伤正常渲染 */ }
+                catch (Exception ex)
+                {
+                    // fail-closed：URI 解析失败视为不可信请求一律 403。
+                    // 正常渲染的资源请求恒为良构绝对 URL（应用自己拼的虚拟主机地址），
+                    // 走到这里只会是畸形/伪造请求，拒绝不会误伤真实渲染。
+                    ea.Response = core.Environment.CreateWebResourceResponse(
+                        null, 403, "Forbidden", "Content-Type: text/plain");
+                    LogWarn("Blocked malformed doc-host request: " + ex.Message);
+                }
             };
         }
 
@@ -1169,6 +1453,25 @@ window.addEventListener('drop',function(e){
                     var id = remIdEl.GetString();
                     if (!string.IsNullOrEmpty(id)) _highlights.Remove(id);
                 }
+                else if (kind == "highlight-fail" && root.TryGetProperty("text", out var annFailEl))
+                {
+                    // 高亮笔选区跨格式边界（strong/em/链接等）时 DOM 无法直接包裹：
+                    // 明确提示用户改选纯文本，避免"画了没反应/字消失"的假象
+                    var t = annFailEl.GetString() ?? "";
+                    if (t.Length > 40) t = t.Substring(0, 40) + "…";
+                    StatusText.Text = "标注失败：选区跨了格式边界（粗体/斜体/链接），请整段只选普通文本。";
+                }
+                else if (kind == "highlight-click")
+                {
+                    // 点击页面高亮标注 → 打开右侧面板查看/管理（未开才开，避免打断阅读）
+                    if (NotesPanel != null && NotesPanel.Visibility != Visibility.Visible)
+                        SetNotesPanelVisibility(true);
+                }
+                else if (kind == "palette-toggle")
+                {
+                    // WebView 内键盘桥接（Ctrl+Shift+P）→ 切换命令面板，绕开 Chromium/WPF 焦点吞键
+                    ToggleCommandPalette();
+                }
             }
             catch (Exception ex) { LogErr("Web msg parse: " + ex.Message + " | rawLen=" + (raw?.Length ?? -1)); }
         }
@@ -1246,7 +1549,7 @@ window.addEventListener('drop',function(e){
 
         private void OnOpenR(object sender, RoutedEventArgs e)
         {
-            if (!_app.IsSplitMode) SetSplitMode(true);
+            EnsureRightPanel();
             _activePanel = _app.Right;
             UpdateActivePanelVisual();
             ShowOpenFor(_app.Right);
@@ -1254,7 +1557,7 @@ window.addEventListener('drop',function(e){
 
         private void OnExportR(object sender, RoutedEventArgs e)
         {
-            if (!_app.IsSplitMode) SetSplitMode(true);
+            EnsureRightPanel();
             ShowExportDialog(_app.Right);
         }
 
@@ -1330,13 +1633,8 @@ window.addEventListener('drop',function(e){
             {
                 Title = "需要 pandoc",
                 Width = 460, SizeToContent = System.Windows.SizeToContent.Height,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Owner = this,
-                ResizeMode = System.Windows.ResizeMode.NoResize,
                 Background = (System.Windows.Media.Brush)FindResource("WindowBackgroundBrush")
             };
-            // 合入主题字典：独立 Window 的 DynamicResource 需要经 ApplyToWindow 才能解析到主题资源
-            _theme.ApplyToWindow(win, _theme.Current);
 
             var panel = new System.Windows.Controls.StackPanel { Margin = new System.Windows.Thickness(20) };
             var msg = new System.Windows.Controls.TextBlock
@@ -1398,8 +1696,7 @@ window.addEventListener('drop',function(e){
             row.Children.Add(cancelBtn);
             panel.Children.Add(row);
 
-            win.Content = panel;
-            win.ShowDialog();
+            ShowThemedDialog(win, w => w.Content = panel);
             return result;
         }
 
@@ -1408,17 +1705,9 @@ window.addEventListener('drop',function(e){
         {
             if (state?.CurrentFile == null) return Task.FromResult<ExportDialogResult?>(null);
             var dlg = new ExportDialog { Owner = this };
-            // 合入主题字典：ExportDialog 是独立 Window，DynamicResource 需经 ApplyToWindow 才能取到主题资源
-            _theme.ApplyToWindow(dlg, _theme.Current);
             dlg.SetSourceFile(state.CurrentFile);
-            dlg.ShowDialog();
+            ShowThemedDialog(dlg, _ => { });
             return Task.FromResult(dlg.Result);
-        }
-
-        public void OpenFile(string path)
-        {
-            if (_app.Left != null && File.Exists(path))
-                OpenFileInternal(_app.Left, path);
         }
 
     }

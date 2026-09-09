@@ -93,7 +93,7 @@
 
     <Grid>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="195"/>
+            <ColumnDefinition x:Name="LeftNavCol" Width="225"/>
             <ColumnDefinition Width="*"/>
             <ColumnDefinition x:Name="InfoPanelCol" Width="190"/>
         </Grid.ColumnDefinitions>
@@ -112,58 +112,50 @@
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
-                <!-- Logo -->
-                <Border Grid.Row="0" Padding="10,14,10,2">
+                <!-- Logo 行：标题 + 纯图标主题按钮（去文字，消除 chip 占宽突兀感；Ctrl+Shift+D 不变） -->
+                <Border Grid.Row="0" Padding="10,12,8,2">
                     <DockPanel>
                         <TextBlock Text="SeeMe" FontSize="18" FontWeight="Bold"
                                    Foreground="{DynamicResource TextPrimaryBrush}"
                                    VerticalAlignment="Center"/>
-                        <Button x:Name="CssBtn" DockPanel.Dock="Right" Style="{StaticResource ChipBtn}"
-                                Margin="6,0,0,0"
-                                Click="OnPickCustomCss" ToolTip="选择自定义 CSS 文件">
-                            <StackPanel Orientation="Horizontal">
-                                <Path Data="{StaticResource IconPalette}"
-                                      Width="11" Height="11" Stretch="Uniform"
-                                      Fill="Transparent"
-                                      Stroke="{DynamicResource IconForegroundBrush}"
-                                      StrokeThickness="1.8"
-                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
-                                      VerticalAlignment="Center"/>
-                                <TextBlock Text="CSS" FontSize="10" Margin="4,0,0,0"
-                                           VerticalAlignment="Center"/>
-                            </StackPanel>
-                        </Button>
-                        <Button x:Name="ThemeToggleBtn" DockPanel.Dock="Right" Style="{StaticResource ChipBtn}"
+                        <Button x:Name="ThemeToggleBtn" DockPanel.Dock="Right" Style="{StaticResource IconBtn}"
+                                Width="28" Padding="2"
                                 Click="OnThemeToggle" ToolTip="切换主题 (Ctrl+Shift+D)">
-                            <StackPanel Orientation="Horizontal">
-                                <Path x:Name="ThemeIconPath" Data="{StaticResource IconMoon}"
-                                      Width="11" Height="11" Stretch="Uniform"
-                                      Fill="Transparent"
-                                      Stroke="{DynamicResource IconForegroundBrush}"
-                                      StrokeThickness="1.8"
-                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
-                                      VerticalAlignment="Center"/>
-                                <TextBlock Text="主题" FontSize="10" Margin="4,0,0,0"
-                                           VerticalAlignment="Center"/>
-                            </StackPanel>
+                            <Path x:Name="ThemeIconPath" Data="{StaticResource IconMoon}"
+                                  Width="13" Height="13" Stretch="Uniform"
+                                  Fill="Transparent"
+                                  Stroke="{DynamicResource IconForegroundBrush}"
+                                  StrokeThickness="1.8"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                  VerticalAlignment="Center"/>
                         </Button>
                     </DockPanel>
                 </Border>
 
-                <!-- Tab 切换条 -->
-                <Grid Grid.Row="1" Margin="10,10,10,6">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <Button x:Name="TabFilesBtn" Grid.Column="0" Style="{StaticResource StatusBtn}"
-                            Content="📄 文件" FontSize="12" FontWeight="SemiBold"
-                            Background="{DynamicResource ItemSelectedBrush}"
-                            Click="OnTabFiles" Margin="0,0,4,0"/>
-                    <Button x:Name="TabOutlineBtn" Grid.Column="1" Style="{StaticResource StatusBtn}"
-                            Content="📑 大纲" FontSize="12"
-                            Click="OnTabOutline" Margin="4,0,0,0"/>
-                </Grid>
+                <!-- Tab 切换条：灰轨道分段控件（iOS 风）——轨道 Border 打底，选中项由 ActivateSideTab 铺 SegPillBrush 白胶囊 -->
+                <Border Grid.Row="1" Margin="10,10,10,10"
+                        Background="{DynamicResource SegTrackBrush}"
+                        CornerRadius="9" Padding="3" SnapsToDevicePixels="True">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="TabFilesBtn" Grid.Column="0" Style="{StaticResource SegTabBtn}"
+                                Content="📄 文件" FontWeight="SemiBold"
+                                Foreground="{DynamicResource TextPrimaryBrush}"
+                                Background="{DynamicResource SegPillBrush}" Tag="on"
+                                Click="OnTabFiles" ToolTip="最近打开的文件列表"/>
+                        <Button x:Name="TabOutlineBtn" Grid.Column="1" Style="{StaticResource SegTabBtn}"
+                                Content="📑 大纲"
+                                Click="OnTabOutline"/>
+                        <Button x:Name="TabAnnBtn" Grid.Column="2" Style="{StaticResource SegTabBtn}"
+                                Content="📌 标注"
+                                Click="OnTabAnn"
+                                ToolTip="全局高亮标注聚合（跨文件可搜可跳转）"/>
+                    </Grid>
+                </Border>
 
                 <!-- 内容区（文件面板 / 大纲面板互斥切换） -->
                 <Grid Grid.Row="2" Margin="8,0,8,0">
@@ -175,8 +167,8 @@
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
 
-                        <!-- 搜索框（空输入时显示占位提示） -->
-                        <Border Grid.Row="0" Margin="6,4,6,0" Padding="8,6"
+                        <!-- 搜索框（空输入时显示占位提示）：上间距 8，让搜索框和 Tab 切换条有呼吸 -->
+                        <Border Grid.Row="0" Margin="6,8,6,0" Padding="8,6"
                                 Background="{DynamicResource CardBackgroundBrush}" CornerRadius="{DynamicResource InputRadius}">
                             <DockPanel>
                                 <Path DockPanel.Dock="Left" Data="{StaticResource IconSearch}"
@@ -202,8 +194,8 @@
                             </DockPanel>
                         </Border>
 
-                        <!-- 最近文件标题 -->
-                        <Grid Grid.Row="1" Margin="12,10,12,4">
+                        <!-- 最近文件标题：上 12 下 6，与 Tab 切换条间距平衡 -->
+                        <Grid Grid.Row="1" Margin="12,12,12,6">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
@@ -333,10 +325,11 @@
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
 
-                        <!-- 大纲标题 -->
-                        <Grid Grid.Row="0" Margin="12,10,12,4">
+                        <!-- 大纲标题：上 12 下 6，与 Tab 切换条间距平衡 -->
+                        <Grid Grid.Row="0" Margin="12,12,12,6">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="📑 大纲" FontSize="11" FontWeight="SemiBold"
@@ -345,7 +338,10 @@
                                        VerticalAlignment="Center"/>
                             <TextBlock Grid.Column="1" x:Name="OutlineCount" FontSize="10"
                                        Foreground="{DynamicResource TextSecondaryBrush}"
-                                       VerticalAlignment="Center" Visibility="Collapsed"/>
+                                       VerticalAlignment="Center" Visibility="Collapsed" Margin="0,0,6,0"/>
+                            <Button Grid.Column="2" x:Name="OutlineMapBtn" Style="{StaticResource ChipBtn}"
+                                    FontSize="10" Padding="6,2" Content="🗺 导图" Click="OnOutlineMapToggle"
+                                    ToolTip="切换大纲列表 / 思维导图视图"/>
                         </Grid>
 
                         <!-- 大纲列表 -->
@@ -374,6 +370,108 @@
                                     </ListBox.Template>
                                 </ListBox>
                                 <TextBlock x:Name="OutlineHint" Text="打开 Markdown 文档后显示大纲"
+                                           FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           TextWrapping="Wrap" TextAlignment="Center"
+                                           Margin="12,0" IsHitTestVisible="False"/>
+                                <wv2:WebView2 x:Name="OutlineMapView" Visibility="Collapsed"
+                                              DefaultBackgroundColor="Transparent"/>
+                            </Grid>
+                        </Border>
+                    </Grid>
+
+                    <!-- ═══ 标注面板（全局高亮聚合：跨文件可搜、点击跳转文件）═══ -->
+                    <Grid x:Name="AnnPanel" Visibility="Collapsed">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <Grid Grid.Row="0" Margin="12,12,12,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="📌 标注" FontSize="11" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                       TextOptions.TextFormattingMode="Display"
+                                       VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" x:Name="AnnCount" FontSize="10"
+                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                       VerticalAlignment="Center" Text="0 条"/>
+                        </Grid>
+                        <Border Grid.Row="1" Margin="6,2,6,6" Padding="8,5"
+                                Background="{DynamicResource CardBackgroundBrush}" CornerRadius="{DynamicResource InputRadius}">
+                            <DockPanel>
+                                <Path DockPanel.Dock="Left" Data="{StaticResource IconSearch}"
+                                      Width="13" Height="13" Stretch="Uniform" Fill="Transparent"
+                                      Stroke="{DynamicResource TextSecondaryBrush}" StrokeThickness="1.8"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                      VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <Grid>
+                                    <TextBox x:Name="AnnSearchBox" FontSize="11"
+                                             Background="Transparent" BorderThickness="0"
+                                             Foreground="{DynamicResource TextBodyBrush}"
+                                             CaretBrush="{DynamicResource TextBodyBrush}"
+                                             SelectionBrush="{DynamicResource AccentBrush}"
+                                             Height="20" TextChanged="OnAnnFilter"/>
+                                    <TextBlock x:Name="AnnSearchHint" Text="搜索标注文本…" FontSize="11"
+                                               Foreground="{DynamicResource TextSecondaryBrush}"
+                                               IsHitTestVisible="False" VerticalAlignment="Center"
+                                               Margin="2,0,0,0"/>
+                                </Grid>
+                            </DockPanel>
+                        </Border>
+                        <Border Grid.Row="2" Margin="6,0,6,8"
+                                Background="{DynamicResource CardBackgroundBrush}" CornerRadius="{DynamicResource InputRadius}">
+                            <Grid>
+                                <ListBox x:Name="AnnList" FontSize="11"
+                                         Background="Transparent" BorderThickness="0"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                         ItemContainerStyle="{StaticResource SidebarItem}"
+                                         MouseLeftButtonUp="OnAnnItemClick"
+                                         PreviewMouseRightButtonUp="OnAnnItemRightClick">
+                                    <ListBox.Template>
+                                        <ControlTemplate TargetType="ListBox">
+                                            <Border Background="{TemplateBinding Background}"
+                                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                                    BorderThickness="{TemplateBinding BorderThickness}">
+                                                <ScrollViewer Style="{DynamicResource ThemedScrollViewer}"
+                                                              Focusable="False"
+                                                              HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}"
+                                                              VerticalScrollBarVisibility="{TemplateBinding ScrollViewer.VerticalScrollBarVisibility}">
+                                                    <ItemsPresenter/>
+                                                </ScrollViewer>
+                                            </Border>
+                                        </ControlTemplate>
+                                    </ListBox.Template>
+<ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <!-- 让 StackPanel 受 ListBox 列宽约束（否则长文件名把列撑爆） -->
+                                    <StackPanel Margin="8,6" HorizontalAlignment="Stretch">
+                                        <TextBlock Text="{Binding Display}" FontSize="11"
+                                                   Foreground="{DynamicResource TextBodyBrush}"
+                                                   TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
+                                                   MaxHeight="34"/>
+                                        <TextBlock Text="{Binding Sub}" FontSize="10" Margin="0,3,0,0"
+                                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                                    <ListBox.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Style="{StaticResource ThemedMenuItem}" Header="打开所在文件"
+                                                      Click="OnAnnOpenFile"/>
+                                            <Separator Style="{StaticResource MenuSeparator}"/>
+                                            <MenuItem Style="{StaticResource ThemedMenuItem}" Header="🗑 删除这条标注"
+                                                      Foreground="{DynamicResource DangerBrush}"
+                                                      Click="OnAnnDelete"/>
+                                        </ContextMenu>
+                                    </ListBox.ContextMenu>
+                                </ListBox>
+                                <TextBlock x:Name="AnnHint" Text="暂无标注 — 用高亮笔在文档里选中文本即可添加"
                                            FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"
                                            HorizontalAlignment="Center" VerticalAlignment="Center"
                                            TextWrapping="Wrap" TextAlignment="Center"
@@ -631,6 +729,9 @@
                         </Button>
                     </Grid>
                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Style="{StaticResource StatusBtn}" Content="命令" FontSize="10"
+                                Margin="0,0,6,0" Click="OnPaletteButton"
+                                ToolTip="命令面板 (Ctrl+Shift+P)：打开文件/切换主题/分栏/导出/最近文件直达"/>
                         <Button x:Name="ImgExportBtn" Style="{StaticResource StatusBtn}" Content="导出图片" FontSize="10"
                                 Margin="0,0,6,0" Click="OnExportImage"
                                 ToolTip="将当前预览截图保存为 PNG"/>

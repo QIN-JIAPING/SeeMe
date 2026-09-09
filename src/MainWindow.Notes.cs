@@ -108,60 +108,111 @@ namespace SeeMe
         /// <summary>当前有打开文件的面板（优先活动面板，其次左右栏）。</summary>
         private PanelState? ActiveFileState()
         {
-            var st = _activePanel ?? _app.Left;
+            var st = ActiveOrLeft;
             if (st != null && !string.IsNullOrEmpty(st.CurrentFile)) return st;
             if (!string.IsNullOrEmpty(_app.Left?.CurrentFile)) return _app.Left;
             if (!string.IsNullOrEmpty(_app.Right?.CurrentFile)) return _app.Right;
             return null;
         }
 
-        /// <summary>按当前面板文件重建笔记列表（用户笔记正文 + 时间 + 删除按钮）。</summary>
+        /// <summary>笔记面板条目公共骨架（唯一来源）：ListBoxItem 外壳 + 可选头部 + 底部行（时间戳 + 删除按钮）。
+        /// head 用于在底部行之前插入条目主体（标注摘要 / 笔记正文）。</summary>
+        private ListBoxItem MakeNotesEntry(string tag, string stampText, string deleteTip, Brush secondary, Action<StackPanel>? head = null)
+        {
+            var li = new ListBoxItem { Tag = tag, Cursor = Cursors.Hand, Margin = new Thickness(2, 1, 2, 1) };
+            var sp = new StackPanel();
+            head?.Invoke(sp);
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 5, 0, 0) };
+            row.Children.Add(new TextBlock
+            {
+                Text = stampText,
+                FontSize = 9,
+                Foreground = secondary,
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            var del = new Button
+            {
+                Content = "删除",
+                Tag = tag,
+                FontSize = 9,
+                Cursor = Cursors.Hand,
+                Padding = new Thickness(8, 2, 8, 2),
+                Margin = new Thickness(8, 0, 0, 0),
+                ToolTip = deleteTip
+            };
+            del.Click += OnNotesItemRemove;
+            row.Children.Add(del);
+            sp.Children.Add(row);
+            li.Content = sp;
+            return li;
+        }
+
+        /// <summary>按当前面板文件重建列表：先列高亮标注（只读+可删），再列用户笔记（可编辑/删除）。</summary>
         private void RefreshNotesPanel()
         {
             if (NotesPanel == null || _notes == null) return;
             NotesList.Items.Clear();
             var st = ActiveFileState();
             var file = st?.CurrentFile;
-            var items = string.IsNullOrEmpty(file) ? Array.Empty<NoteItem>() : _notes.ForFile(file);
+            var highlights = string.IsNullOrEmpty(file) ? Array.Empty<HighlightItem>() : _highlights.ForFile(file);
+            var notes = string.IsNullOrEmpty(file) ? Array.Empty<NoteItem>() : _notes.ForFile(file);
+            var total = highlights.Count + notes.Count;
             if (NotesCountText != null)
-                NotesCountText.Text = items.Count > 0 ? $"{items.Count} 条笔记" : "暂无笔记";
+                NotesCountText.Text = total > 0 ? $"{total} 条（标注 {highlights.Count} · 笔记 {notes.Count}）" : "暂无标注与笔记";
             var secondary = TryFindResource("TextSecondaryBrush") as Brush ?? Brushes.Gray;
             var body = TryFindResource("TextBodyBrush") as Brush ?? Brushes.Black;
-            foreach (var it in items)
+            var accent = TryFindResource("AccentBrush") as Brush ?? Brushes.CornflowerBlue;
+            var markBg = TryFindResource("ItemSelectedBrush") as Brush ?? Brushes.LightYellow;
+            // ── 高亮标注条目（只读：文本摘要 + 来源行 + 删除）──
+            foreach (var h in highlights)
             {
-                var li = new ListBoxItem { Tag = it.Id, Cursor = Cursors.Hand, Margin = new Thickness(2, 1, 2, 1) };
-                var sp = new StackPanel();
-                sp.Children.Add(new TextBlock
+                NotesList.Items.Add(MakeNotesEntry("hl:" + h.Id, h.Created.ToString("MM-dd HH:mm"),
+                    "删除该高亮标注", secondary, sp =>
                 {
-                    Text = string.IsNullOrWhiteSpace(it.Content) ? "（空笔记）" : it.Content,
-                    FontSize = 11,
-                    Foreground = body,
-                    TextWrapping = TextWrapping.Wrap,
-                    MaxHeight = 96
-                });
-                var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 5, 0, 0) };
-                row.Children.Add(new TextBlock
+                    sp.Children.Add(new TextBlock
+                    {
+                        Text = "💡 高亮",
+                        FontSize = 9,
+                        Foreground = accent,
+                        FontWeight = FontWeights.SemiBold,
+                        Margin = new Thickness(0, 0, 0, 2)
+                    });
+                    var t = (h.Text ?? "").Replace('\n', ' ').Trim();
+                    sp.Children.Add(new TextBlock
+                    {
+                        Text = string.IsNullOrEmpty(t) ? "（空标注）" : t,
+                        FontSize = 11,
+                        Foreground = body,
+                        TextWrapping = TextWrapping.Wrap,
+                        MaxHeight = 96,
+                        Background = markBg
+                    });
+                    if (!string.IsNullOrWhiteSpace(h.Note))
+                        sp.Children.Add(new TextBlock
+                        {
+                            Text = "✎ " + h.Note,
+                            FontSize = 10,
+                            Foreground = secondary,
+                            TextWrapping = TextWrapping.Wrap,
+                            Margin = new Thickness(0, 3, 0, 0)
+                        });
+                }));
+            }
+            // ── 用户笔记条目 ──
+            foreach (var it in notes)
+            {
+                NotesList.Items.Add(MakeNotesEntry(it.Id, "修改 " + it.Modified.ToString("MM-dd HH:mm"),
+                    "删除该笔记", secondary, sp =>
                 {
-                    Text = "修改 " + it.Modified.ToString("MM-dd HH:mm"),
-                    FontSize = 9,
-                    Foreground = secondary,
-                    VerticalAlignment = VerticalAlignment.Center
-                });
-                var del = new Button
-                {
-                    Content = "删除",
-                    Tag = it.Id,
-                    FontSize = 9,
-                    Cursor = Cursors.Hand,
-                    Padding = new Thickness(8, 2, 8, 2),
-                    Margin = new Thickness(8, 0, 0, 0),
-                    ToolTip = "删除该笔记"
-                };
-                del.Click += OnNotesItemRemove;
-                row.Children.Add(del);
-                sp.Children.Add(row);
-                li.Content = sp;
-                NotesList.Items.Add(li);
+                    sp.Children.Add(new TextBlock
+                    {
+                        Text = string.IsNullOrWhiteSpace(it.Content) ? "（空笔记）" : it.Content,
+                        FontSize = 11,
+                        Foreground = body,
+                        TextWrapping = TextWrapping.Wrap,
+                        MaxHeight = 96
+                    });
+                }));
             }
             _selectedNoteId = "";
             NotesNoteBox.Text = "";
@@ -173,6 +224,8 @@ namespace SeeMe
         {
             if (NotesList.SelectedItem is ListBoxItem li && li.Tag is string id && _notes != null)
             {
+                // 高亮条目不是笔记：仅选中高亮、不进笔记编辑流
+                if (id.StartsWith("hl:", StringComparison.Ordinal)) { _selectedNoteId = ""; return; }
                 _selectedNoteId = id;
                 var it = _notes.Items.FirstOrDefault(x => x.Id == id);
                 NotesNoteBox.Text = it?.Content ?? "";
@@ -239,11 +292,22 @@ namespace SeeMe
 
         private void OnNotesItemRemove(object sender, RoutedEventArgs e)
         {
-            if (sender is Button b && b.Tag is string id)
+            if (sender is not Button b || b.Tag is not string id) return;
+            if (id.StartsWith("hl:", StringComparison.Ordinal))
             {
-                _notes.Remove(id);
-                if (_selectedNoteId == id) _selectedNoteId = "";
+                // 删除高亮标注：清存储 + 刷新笔记面板 + 重渲染当前文件移除页面 mark
+                var hid = id.Substring(3);
+                _highlights.Remove(hid);
+                RefreshNotesPanel();
+                var st = ActiveFileState();
+                if (st?.CurrentFile != null)
+                    _ = ReloadFileAsync(st, true, st.ResetCts());
+                StatusText.Text = "已删除该高亮标注";
+                return;
             }
+            _notes.Remove(id);
+            if (_selectedNoteId == id) _selectedNoteId = "";
+            RefreshNotesPanel();
         }
 
         private void OnNotesClearFile(object sender, RoutedEventArgs e)
@@ -329,7 +393,7 @@ namespace SeeMe
         /// <summary>调用 WebView2 系统打印对话框（Markdown/Office/PDF 文本视图均走当前 DOM 打印）。</summary>
         private void PrintActivePanel()
         {
-            var st = _activePanel ?? _app.Left;
+            var st = ActiveOrLeft;
             if (st?.WebView?.CoreWebView2 == null)
             {
                 StatusText.Text = "没有可打印的页面";

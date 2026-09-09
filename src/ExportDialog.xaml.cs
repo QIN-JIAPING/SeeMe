@@ -21,16 +21,6 @@ namespace SeeMe
     /// <summary>导出为... 对话框（独立窗口；打开前经 ThemeManager.ApplyToWindow 合入主题字典，颜色随主题）。</summary>
     public partial class ExportDialog : Window
     {
-        private readonly (string Fmt, string Label, string Ext)[] Formats =
-        {
-            ("docx", "Word 文档", ".docx"),
-            ("pdf", "PDF 文档", ".pdf"),
-            ("latex", "LaTeX", ".tex"),
-            ("html", "HTML 网页", ".html"),
-            ("epub", "电子书", ".epub"),
-            ("markdown", "Markdown", ".md"),
-        };
-
         private string _selectedFormat = "docx";
         private string _selectedExt = ".docx";
         private string _sourceName = "document";
@@ -66,9 +56,11 @@ namespace SeeMe
             FormatGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
             FormatGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
-            for (int i = 0; i < Formats.Length; i++)
+            for (int i = 0; i < SupportedExportFormats.DialogFormats.Count; i++)
             {
-                var (fmt, label, ext) = Formats[i];
+                var fmt = SupportedExportFormats.DialogFormats[i];
+                var label = fmt.Label;
+                var ext = fmt.Ext;
                 var row = i / 2;
                 var col = i % 2 * 2;
 
@@ -81,7 +73,7 @@ namespace SeeMe
                     Margin = new Thickness(0, 4, 0, 4),
                     HorizontalAlignment = HorizontalAlignment.Stretch,
                     HorizontalContentAlignment = HorizontalAlignment.Left,
-                    Tag = (fmt, ext),
+                    Tag = (fmt.Format, ext),
                     Content = new StackPanel
                     {
                         Children =
@@ -100,7 +92,7 @@ namespace SeeMe
                     UpdatePath();
                 };
 
-                if (fmt == _selectedFormat)
+                if (fmt.Format == _selectedFormat)
                     UpdateActive(btn);
 
                 Grid.SetRow(btn, row);
@@ -148,16 +140,8 @@ namespace SeeMe
                 PathBox.Text = dlg.FileName;
         }
 
-        private static string GetSaveFilter(string format) => format.ToLowerInvariant() switch
-        {
-            "docx" => "Word 文档 (*.docx)|*.docx",
-            "pdf" => "PDF 文档 (*.pdf)|*.pdf",
-            "latex" or "tex" => "LaTeX 源文件 (*.tex)|*.tex",
-            "html" => "HTML 网页 (*.html)|*.html",
-            "epub" => "电子书 (*.epub)|*.epub",
-            "markdown" or "md" => "Markdown 文件 (*.md)|*.md",
-            _ => "所有文件 (*.*)|*.*",
-        };
+        private static string GetSaveFilter(string format) =>
+            SupportedExportFormats.FromFormat(format)?.Filter ?? "所有文件 (*.*)|*.*";
 
         private void OnCancel(object sender, RoutedEventArgs e)
         {

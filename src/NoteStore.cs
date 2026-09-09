@@ -5,7 +5,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text.Json;
 
 namespace SeeMe
 {
@@ -22,58 +21,31 @@ namespace SeeMe
     /// <summary>
     /// 用户笔记存储：按文件路径持久化用户输入笔记（独立于 HighlightStore）。
     /// 存储于 %LOCALAPPDATA%\SeeMe\notes.json，重启后笔记仍保留。
+    /// 构造器可注入自定义存储路径（测试隔离用），默认走真实 LocalApplicationData。
     /// </summary>
-    public class NoteStore : INoteStore
+    public class NoteStore : JsonListStore<NoteItem>, INoteStore
     {
-        private static readonly string StoragePath =
+        private static string DefaultStoragePath =>
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "SeeMe", "notes.json");
-
-        private readonly List<NoteItem> _items = new();
 
         public IReadOnlyList<NoteItem> Items => _items;
 
         public event Action? Changed;
 
-        public static NoteStore Load()
+        public NoteStore(string? storagePath = null) : base(storagePath ?? DefaultStoragePath, "NoteStore") { }
+
+        public static NoteStore Load(string? storagePath = null)
         {
-            var store = new NoteStore();
-            try
-            {
-                var dir = Path.GetDirectoryName(StoragePath);
-                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                    Directory.CreateDirectory(dir);
-                if (File.Exists(StoragePath))
-                {
-                    var json = File.ReadAllText(StoragePath);
-                    var list = JsonSerializer.Deserialize<List<NoteItem>>(json);
-                    if (list != null)
-                    {
-                        foreach (var it in list)
-                        {
-                            if (it != null && !string.IsNullOrEmpty(it.Id) && !string.IsNullOrEmpty(it.File)
-                                && !store._items.Any(x => x.Id == it.Id))
-                                store._items.Add(it);
-                        }
-                    }
-                }
-            }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[SeeMe] NoteStore.Load: " + ex.Message); }
+            var store = new NoteStore(storagePath);
+            store.LoadFromDisk();
             return store;
         }
 
-        private void Save()
-        {
-            try
-            {
-                var dir = Path.GetDirectoryName(StoragePath);
-                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                    Directory.CreateDirectory(dir);
-                File.WriteAllText(StoragePath,
-                    JsonSerializer.Serialize(_items, new JsonSerializerOptions { WriteIndented = true }));
-            }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[SeeMe] NoteStore.Save: " + ex.Message); }
-        }
+        /// <summary>合法条目：Id/File 非空且 Id 未重复。</summary>
+        protected override bool CanIngest(NoteItem it)
+            => !string.IsNullOrEmpty(it.Id) && !string.IsNullOrEmpty(it.File)
+               && !_items.Any(x => x.Id == it.Id);
 
         public IReadOnlyList<NoteItem> ForFile(string path)
         {

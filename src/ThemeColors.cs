@@ -33,6 +33,9 @@ namespace SeeMe
             public static readonly Color TitleBarActive  = Color.FromRgb(0xEE, 0xF0, 0xFF);
             public static readonly Color ItemHover       = Color.FromRgb(0xF4, 0xF5, 0xFF);
             public static readonly Color ItemSelected    = Color.FromRgb(0xE0, 0xE3, 0xFF);
+            // 分段 Tab（文件/大纲/标注）：灰轨道底 + 选中白色胶囊（iOS 分段控件风格）
+            public static readonly Color SegTrack        = Color.FromRgb(0xE9, 0xED, 0xF4);
+            public static readonly Color SegPill         = Color.FromRgb(0xFF, 0xFF, 0xFF);
         }
 
         public static class Dark
@@ -55,6 +58,9 @@ namespace SeeMe
             public static readonly Color TitleBarActive  = Color.FromRgb(0x2E, 0x30, 0x50);
             public static readonly Color ItemHover       = Color.FromRgb(0x24, 0x2B, 0x38);
             public static readonly Color ItemSelected    = Color.FromRgb(0x2E, 0x30, 0x50);
+            // 分段 Tab：暗色轨道比侧栏底更深一档，胶囊用亮一档的卡片色，保证浮起感
+            public static readonly Color SegTrack        = Color.FromRgb(0x14, 0x1A, 0x23);
+            public static readonly Color SegPill         = Color.FromRgb(0x2A, 0x33, 0x42);
         }
 
         /// <summary>按主题返回 WPF 资源名 → 颜色映射（与 XAML 中 DynamicResource 键一一对应）。
@@ -83,6 +89,8 @@ namespace SeeMe
                     ["TitleBarActiveBackgroundBrush"] = Dark.TitleBarActive,
                     ["ItemHoverBrush"]             = Dark.ItemHover,
                     ["ItemSelectedBrush"]          = Dark.ItemSelected,
+                    ["SegTrackBrush"]              = Dark.SegTrack,
+                    ["SegPillBrush"]               = Dark.SegPill,
                 }
                 : new System.Collections.Generic.Dictionary<string, Color>
                 {
@@ -103,6 +111,8 @@ namespace SeeMe
                     ["TitleBarActiveBackgroundBrush"] = Light.TitleBarActive,
                     ["ItemHoverBrush"]             = Light.ItemHover,
                     ["ItemSelectedBrush"]          = Light.ItemSelected,
+                    ["SegTrackBrush"]              = Light.SegTrack,
+                    ["SegPillBrush"]               = Light.SegPill,
                 };
 
             ApplyAccentOverrides(map, isDark, accent);

@@ -5,7 +5,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text.Json;
 
 namespace SeeMe
 {
@@ -23,58 +22,31 @@ namespace SeeMe
     /// <summary>
     /// 高亮标注存储：按文件路径持久化选区高亮，独立于 FileHistory / BookmarkStore。
     /// 存储于 %LOCALAPPDATA%\SeeMe\highlights.json，重启后标注仍保留。
+    /// 构造器可注入自定义存储路径（测试隔离用），默认走真实 LocalApplicationData。
     /// </summary>
-    public class HighlightStore : IHighlightStore
+    public class HighlightStore : JsonListStore<HighlightItem>, IHighlightStore
     {
-        private static readonly string StoragePath =
+        private static string DefaultStoragePath =>
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "SeeMe", "highlights.json");
-
-        private readonly List<HighlightItem> _items = new();
 
         public IReadOnlyList<HighlightItem> Items => _items;
 
         public event Action? Changed;
 
-        public static HighlightStore Load()
+        public HighlightStore(string? storagePath = null) : base(storagePath ?? DefaultStoragePath, "HighlightStore") { }
+
+        public static HighlightStore Load(string? storagePath = null)
         {
-            var store = new HighlightStore();
-            try
-            {
-                var dir = Path.GetDirectoryName(StoragePath);
-                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                    Directory.CreateDirectory(dir);
-                if (File.Exists(StoragePath))
-                {
-                    var json = File.ReadAllText(StoragePath);
-                    var list = JsonSerializer.Deserialize<List<HighlightItem>>(json);
-                    if (list != null)
-                    {
-                        foreach (var it in list)
-                        {
-                            if (it != null && !string.IsNullOrEmpty(it.Id) && !string.IsNullOrEmpty(it.Text)
-                                && !store._items.Any(x => x.Id == it.Id))
-                                store._items.Add(it);
-                        }
-                    }
-                }
-            }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[SeeMe] HighlightStore.Load: " + ex.Message); }
+            var store = new HighlightStore(storagePath);
+            store.LoadFromDisk();
             return store;
         }
 
-        private void Save()
-        {
-            try
-            {
-                var dir = Path.GetDirectoryName(StoragePath);
-                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                    Directory.CreateDirectory(dir);
-                File.WriteAllText(StoragePath,
-                    JsonSerializer.Serialize(_items, new JsonSerializerOptions { WriteIndented = true }));
-            }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[SeeMe] HighlightStore.Save: " + ex.Message); }
-        }
+        /// <summary>合法条目：Id/Text 非空且 Id 未重复。</summary>
+        protected override bool CanIngest(HighlightItem it)
+            => !string.IsNullOrEmpty(it.Id) && !string.IsNullOrEmpty(it.Text)
+               && !_items.Any(x => x.Id == it.Id);
 
         public IReadOnlyList<HighlightItem> ForFile(string path)
         {
@@ -96,17 +68,6 @@ namespace SeeMe
             if (it != null)
             {
                 _items.Remove(it);
-                Save();
-                Changed?.Invoke();
-            }
-        }
-
-        public void SetNote(string id, string note)
-        {
-            var it = _items.FirstOrDefault(i => i.Id == id);
-            if (it != null)
-            {
-                it.Note = note ?? "";
                 Save();
                 Changed?.Invoke();
             }

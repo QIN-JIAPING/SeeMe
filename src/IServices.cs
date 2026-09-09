@@ -56,8 +56,6 @@ namespace SeeMe
         string BuildTocCard(string md);
         List<TocItem> BuildTocItems(string renderedHtml);
         string StripBom(string s);
-        Color ParseMediaColor(string hex);
-        string? TryBrushHex(FrameworkElement element, string key);
         bool IsDarkTheme(IThemeManager theme);
         string Render(string bodyHtml, PanelState state, string frontMatterCard, FrameworkElement resourceElement, Func<string>? logErr = null, string? customCss = null);
         string BuildOfficePage(string bodyHtml, PanelState state, FrameworkElement resourceElement);
@@ -77,11 +75,9 @@ namespace SeeMe
     /// <summary>书签存储契约。</summary>
     public interface IBookmarkStore
     {
-        IReadOnlyList<string> Paths { get; }
         event Action? Changed;
         bool Contains(string path);
         bool Toggle(string path);
-        void Remove(string path);
     }
 
     /// <summary>高亮标注存储契约：按文件路径持久化选区高亮（重启后仍保留）。</summary>
@@ -92,7 +88,6 @@ namespace SeeMe
         IReadOnlyList<HighlightItem> ForFile(string path);
         void Add(HighlightItem item);
         void Remove(string id);
-        void SetNote(string id, string note);
         void ClearFile(string path);
     }
 

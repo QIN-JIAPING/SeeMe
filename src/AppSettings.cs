@@ -16,9 +16,14 @@ namespace SeeMe
     /// </summary>
     public static class AppSettings
     {
-        private static readonly string StoragePath = Path.Combine(
+        private static string DefaultStoragePath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "SeeMe", "settings.json");
+
+        private static string? _storagePathOverride;
+
+        /// <summary>实际生效的存储路径（测试可覆盖）。</summary>
+        private static string StoragePath => _storagePathOverride ?? DefaultStoragePath;
 
         // ── 键名 ──
         public const string ThemeModeKey        = "themeMode";        // light / dark / system
@@ -44,8 +49,19 @@ namespace SeeMe
         public const string AutoSaveDelayKey      = "autoSaveDelay";    // int 秒（5 / 10 / 30）
         public const string RemoteImageAllowKey   = "remoteImageAllow"; // string[]（允许加载远程图片的文档路径）
         public const string AnnModeKey            = "annMode";          // bool（高亮笔开关，重启/退出后保持）
+        public const string PdfIncludeTocKey      = "pdfIncludeToc";    // bool（PDF 导出包含目录）
+        public const string PdfPageNumberKey      = "pdfPageNumber";    // bool（PDF 导出页码）
+        public const string PdfWatermarkKey       = "pdfWatermark";     // bool（PDF 导出水印）
+        public const string PdfWatermarkTextKey   = "pdfWatermarkText"; // string（水印文字）
 
-        private static readonly Dictionary<string, JsonNode?> Cache = LoadAll();
+        private static Dictionary<string, JsonNode?> Cache = LoadAll();
+
+        /// <summary>测试隔离：覆盖存储路径并重新加载缓存（仅测试使用）。</summary>
+        public static void ResetForTest(string? storagePath = null)
+        {
+            _storagePathOverride = storagePath;
+            Cache = LoadAll();
+        }
 
         private static Dictionary<string, JsonNode?> LoadAll()
         {
@@ -62,7 +78,7 @@ namespace SeeMe
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine("[SeeMe] AppSettings.LoadAll: " + ex.Message);
+                SeeMeLog.Info("AppSettings.LoadAll", ex.Message);
             }
             return map;
         }
@@ -120,7 +136,7 @@ namespace SeeMe
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine("[SeeMe] AppSettings.Set: " + ex.Message);
+                SeeMeLog.Info("AppSettings.Set", ex.Message);
             }
         }
 

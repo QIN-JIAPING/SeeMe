@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,6 +13,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 
@@ -96,7 +99,7 @@ namespace SeeMe
         {
             try
             {
-                const double narrowThreshold = 480;
+                const double narrowThreshold = 560;
                 var leftNarrow = WebViewL.ActualWidth > 0 && WebViewL.ActualWidth < narrowThreshold;
                 var rightNarrow = WebViewR.ActualWidth > 0 && WebViewR.ActualWidth < narrowThreshold;
                 TitleBarActionsL.Visibility = leftNarrow ? Visibility.Collapsed : Visibility.Visible;
@@ -239,7 +242,7 @@ namespace SeeMe
                     {
                         var fi = new FileInfo(path);
                         if (fi.Length > 2L * 1024 * 1024) return (-1, -1); // 超限仅提示
-                        var text = ReadTextAuto(path);
+                        var text = TextEncoding.ReadAuto(path);
                         var (cjk, words) = CountTextStats(text);
                         var lines = text.Split('\n').Length;
                         return (cjk + words, lines);
@@ -268,7 +271,8 @@ namespace SeeMe
                     if (unknown) { SetStats("—", "—", "—"); return; } // 尚未提取
                     if (scanned)
                     {
-                        SetStats("—", "—", CountPdfPages(path) > 0 ? CountPdfPages(path).ToString("N0") : "—");
+                        var pg = CountPdfPages(path);
+                        SetStats("—", "—", pg > 0 ? pg.ToString("N0") : "—");
                         return;
                     }
                     var pdfStats = await Task.Run(() =>
@@ -404,7 +408,7 @@ namespace SeeMe
             try
             {
                 if (BacklinkList.SelectedItem is string path && File.Exists(path))
-                    OpenFileInternal(_activePanel ?? _app.Left, path);
+                    OpenFileInternal(ActiveOrLeft, path);
             }
             catch (Exception ex) { LogErr("OnBacklinkClick: " + ex.Message); }
         }
@@ -514,28 +518,238 @@ namespace SeeMe
             catch (Exception ex) { LogErr("Window size changed: " + ex.Message); }
         }
 
-        /// <summary>切换左侧栏 文件/大纲 Tab（选中项以背景高亮区分，无下划线）。</summary>
-        private void OnTabFiles(object sender, RoutedEventArgs e)
+        /// <summary>左侧栏 三态 Tab（文件 / 大纲 / 标注）：灰轨道分段控件——选中项铺 SegPillBrush 胶囊、
+        /// 加粗 + 主文字色，并打 Tag="on" 抑制 hover 变色；其余保持透明胶囊、悬停走 SegTabBtn 模板触发器。</summary>
+        private void ActivateSideTab(int idx)
         {
-            FilesPanel.Visibility = Visibility.Visible;
-            OutlinePanel.Visibility = Visibility.Collapsed;
-            TabFilesBtn.Background = FindResource("ItemSelectedBrush") as System.Windows.Media.Brush;
-            TabFilesBtn.FontWeight = FontWeights.SemiBold;
-            TabOutlineBtn.Background = System.Windows.Media.Brushes.Transparent;
-            TabOutlineBtn.FontWeight = FontWeights.Normal;
+            FilesPanel.Visibility = idx == 0 ? Visibility.Visible : Visibility.Collapsed;
+            OutlinePanel.Visibility = idx == 1 ? Visibility.Visible : Visibility.Collapsed;
+            if (AnnPanel != null) AnnPanel.Visibility = idx == 2 ? Visibility.Visible : Visibility.Collapsed;
+            var pill  = FindResource("SegPillBrush") as System.Windows.Media.Brush;
+            var fgOn  = FindResource("TextPrimaryBrush") as System.Windows.Media.Brush;
+            var fgOff = FindResource("TextBodyBrush") as System.Windows.Media.Brush;
+            SetSegTab(TabFilesBtn,   idx == 0, pill, fgOn, fgOff);
+            SetSegTab(TabOutlineBtn, idx == 1, pill, fgOn, fgOff);
+            if (TabAnnBtn != null) SetSegTab(TabAnnBtn, idx == 2, pill, fgOn, fgOff);
+            if (idx == 2 && AnnPanel != null) RefreshAnnList(AnnSearchBox?.Text ?? "");
         }
 
-        private void OnTabOutline(object sender, RoutedEventArgs e)
+        /// <summary>单个分段 Tab 的选中/非选中视觉（背景胶囊 + Tag 标记 + 字重字色）。</summary>
+        private static void SetSegTab(System.Windows.Controls.Button? b, bool active,
+            System.Windows.Media.Brush? pill, System.Windows.Media.Brush? fgOn, System.Windows.Media.Brush? fgOff)
         {
-            FilesPanel.Visibility = Visibility.Collapsed;
-            OutlinePanel.Visibility = Visibility.Visible;
-            TabFilesBtn.Background = System.Windows.Media.Brushes.Transparent;
-            TabFilesBtn.FontWeight = FontWeights.Normal;
-            TabOutlineBtn.Background = FindResource("ItemSelectedBrush") as System.Windows.Media.Brush;
-            TabOutlineBtn.FontWeight = FontWeights.SemiBold;
+            if (b == null) return;
+            b.Background  = active ? pill : System.Windows.Media.Brushes.Transparent;
+            b.Tag         = active ? "on" : null;
+            b.FontWeight  = active ? FontWeights.SemiBold : FontWeights.Normal;
+            b.Foreground  = active ? fgOn : fgOff;
         }
 
-        /// <summary>临时禁用/恢复两个 WebView 的渲染（不再使用：Visibility 切换会重建 WebView2 渲染表面，大文档恢复灰屏）。</summary>
+        private void OnTabFiles(object sender, RoutedEventArgs e) => ActivateSideTab(0);
 
+        private void OnTabOutline(object sender, RoutedEventArgs e) => ActivateSideTab(1);
+
+        private void OnTabAnn(object sender, RoutedEventArgs e) => ActivateSideTab(2);
+
+        // ═══════════════ 标注聚合面板（全局高亮，跨文件） ═══════════════
+
+        private sealed class AnnVm
+        {
+            // WPF Binding 只支持属性，字段绑不到——必须 public {get;set;}
+            public string Display { get; set; } = "";
+            public string Sub { get; set; } = "";
+            public HighlightItem Item { get; set; } = null!;
+        }
+
+        /// <summary>刷新标注列表：全局高亮标注按文本/文件名过滤（空=全部），空态提示与计数联动。</summary>
+        private void RefreshAnnList(string filter)
+        {
+            try
+            {
+                if (AnnList == null) return;
+                var f = (filter ?? "").Trim().ToLowerInvariant();
+                IEnumerable<HighlightItem> src = _highlights.Items;
+                if (f.Length > 0)
+                    src = src.Where(i =>
+                        (i.Text ?? "").ToLowerInvariant().Contains(f)
+                        || (i.File ?? "").ToLowerInvariant().Contains(f)
+                        || (i.Note ?? "").ToLowerInvariant().Contains(f));
+                var list = src.Select(i =>
+                {
+                    var text = (i.Text ?? "").Replace('\n', ' ').Trim();
+                    if (text.Length > 60) text = text.Substring(0, 60) + "…";
+                    var noteMark = string.IsNullOrEmpty(i.Note) ? "" : " 💬";
+                    string sub;
+                    try { sub = System.IO.Path.GetFileName(i.File); }
+                    catch { sub = i.File ?? ""; }
+                    sub += " · " + i.Created.ToString("MM-dd HH:mm") + noteMark;
+                    return new AnnVm { Display = text, Sub = sub, Item = i };
+                }).ToList();
+                AnnList.ItemsSource = null;
+                AnnList.ItemsSource = list;
+                var total = _highlights.Items.Count;
+                AnnCount.Text = total > 0 ? $"{total} 条" : "0 条";
+                AnnHint.Visibility = total == 0 ? Visibility.Visible : Visibility.Collapsed;
+                AnnList.Visibility = total == 0 ? Visibility.Collapsed : Visibility.Visible;
+            }
+            catch (Exception ex) { LogErr("RefreshAnnList: " + ex.Message); }
+        }
+
+        private void OnAnnFilter(object sender, TextChangedEventArgs e)
+        {
+            if (AnnSearchBox == null) return;
+            AnnSearchHint.Visibility = string.IsNullOrEmpty(AnnSearchBox.Text)
+                ? Visibility.Visible : Visibility.Collapsed;
+            RefreshAnnList(AnnSearchBox.Text);
+        }
+
+        private void OnHighlightsChanged()
+        {
+            try
+            {
+                if (AnnPanel?.Visibility != Visibility.Visible) return;
+                Dispatcher.BeginInvoke(new Action(() => RefreshAnnList(AnnSearchBox?.Text ?? "")));
+            }
+            catch { }
+        }
+
+        /// <summary>点击标注：在其原文件所在面板打开（当前文件即用所在面板），失败自动转左栏，并滚动+高亮跳到对应位置。</summary>
+        private void OnAnnItemClick(object sender, MouseButtonEventArgs e)
+        {
+            if (AnnList.SelectedItem is not AnnVm vm || vm.Item == null) return;
+            OpenAnnFile(vm.Item.File);
+            JumpToHighlightInOpenFile(vm.Item.Text);
+        }
+
+        /// <summary>向当前活动面板发送 JS 跳转：滚动到第一个匹配文本，临时蓝色高亮 2 秒后消失。</summary>
+        private void JumpToHighlightInOpenFile(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+            Dispatcher.BeginInvoke(new Action(async () =>
+            {
+                await System.Threading.Tasks.Task.Delay(800); // 等页面渲染完成
+                var p = _activePanel ?? _app?.Left;
+                if (p?.WebView?.CoreWebView2 == null) return;
+                var q = System.Text.Json.JsonSerializer.Serialize(text);
+                try
+                {
+                    await p.WebView.CoreWebView2.ExecuteScriptAsync(
+                        $"window.__seemeJumpToText && window.__seemeJumpToText({q})");
+                }
+                catch { }
+            }), DispatcherPriority.Background);
+        }
+
+        private void OpenAnnFile(string file)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(file) || !System.IO.File.Exists(file)) return;
+                // 优先在已打开该文件的面板跳转；否则打开到活动/左栏面板
+                foreach (var st in new[] { _app.Left, _app.Right })
+                {
+                    if (st != null && string.Equals(st.CurrentFile, file, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _activePanel = st;
+                        UpdateActivePanelVisual();
+                        return; // 同文件已在预览（高亮已加载）——不重复导航
+                    }
+                }
+                var p = ActiveOrLeft;
+                if (p != null) OpenFileInto(p, file);
+            }
+            catch (Exception ex) { LogErr("OpenAnnFile: " + ex.Message); }
+        }
+
+        private void OnAnnItemRightClick(object sender, MouseButtonEventArgs e)
+        {
+            var dep = e.OriginalSource as System.Windows.DependencyObject;
+            var item = FindAncestor<ListBoxItem>(dep);
+            if (item != null) item.IsSelected = true;
+        }
+
+        private void OnAnnOpenFile(object sender, RoutedEventArgs e)
+        {
+            if (AnnList.SelectedItem is AnnVm vm && vm.Item != null) OpenAnnFile(vm.Item.File);
+        }
+
+        private void OnAnnDelete(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (AnnList.SelectedItem is not AnnVm vm || vm.Item == null) return;
+                var file = vm.Item.File;
+                _highlights.Remove(vm.Item.Id);
+                RefreshAnnList(AnnSearchBox?.Text ?? "");
+                StatusText.Text = "已删除标注";
+                // 若删的是当前打开文件的标注 → 刷新页面移除高亮
+                foreach (var st in new[] { _app.Left, _app.Right })
+                {
+                    if (st != null && string.Equals(st.CurrentFile, file, StringComparison.OrdinalIgnoreCase)
+                        && !string.IsNullOrEmpty(st.CurrentFile))
+                        _ = ReloadFileAsync(st, true, st.ResetCts());
+                }
+            }
+            catch (Exception ex) { LogErr("OnAnnDelete: " + ex.Message); }
+        }
+
+        /// <summary>当前大纲导图模式（true=思维导图视图，false=列表）。</summary>
+        private bool _outlineMapMode;
+
+        /// <summary>切换大纲列表 / 思维导图视图。导图模式用 OutlineMapView 渲染当前文档标题树。</summary>
+        private async void OnOutlineMapToggle(object sender, RoutedEventArgs e)
+        {
+            _outlineMapMode = !_outlineMapMode;
+            try
+            {
+                if (_outlineMapMode)
+                {
+                    OutlineList.Visibility = Visibility.Collapsed;
+                    OutlineHint.Visibility = Visibility.Collapsed;
+                    OutlineMapView.Visibility = Visibility.Visible;
+                    var page = RenderService.BuildOutlineMapPage(
+                        _theme.Current == _theme.Dark, BuildOutlineMarkdown(_lastTocItems));
+                    await EnsureOutlineMapReadyAsync();
+                    OutlineMapView.NavigateToString(page);
+                }
+                else
+                {
+                    OutlineMapView.Visibility = Visibility.Collapsed;
+                    var has = _lastTocItems is { Count: > 0 };
+                    OutlineList.Visibility = has ? Visibility.Visible : Visibility.Collapsed;
+                    OutlineHint.Visibility = has ? Visibility.Collapsed : Visibility.Visible;
+                }
+            }
+            catch (Exception ex) { LogErr("Outline map: " + ex.Message); }
+        }
+
+        /// <summary>把大纲条目（标题层级）还原为 markmap 可解析的 Markdown 标题树。</summary>
+        private static string BuildOutlineMarkdown(List<TocItem>? items)
+        {
+            if (items == null || items.Count == 0) return "# （无标题结构）";
+            var sb = new StringBuilder();
+            foreach (var it in items)
+            {
+                var lvl = Math.Clamp(it.Level, 1, 6);
+                var title = string.IsNullOrWhiteSpace(it.Title) ? "（无标题）" : it.Title;
+                sb.Append(new string('#', lvl)).Append(' ').Append(title).Append('\n');
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>确保 OutlineMapView 的 CoreWebView2 已初始化并完成虚拟主机映射。</summary>
+        private async System.Threading.Tasks.Task EnsureOutlineMapReadyAsync()
+        {
+            if (OutlineMapView.CoreWebView2 == null)
+            {
+                await OutlineMapView.EnsureCoreWebView2Async();
+            }
+            var core = OutlineMapView.CoreWebView2;
+            if (core == null) return;
+            var resRoot = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Resources");
+            core.SetVirtualHostNameToFolderMapping(
+                RenderService.VirtualHost, resRoot,
+                Microsoft.Web.WebView2.Core.CoreWebView2HostResourceAccessKind.Allow);
+        }
     }
 }

@@ -3,7 +3,11 @@
 
 using System;
 using System.IO;
+using System.Reflection;
 using System.Windows;
+using Sentry;
+using Velopack;
+using Velopack.Sources;
 
 namespace SeeMe
 {
@@ -19,6 +23,8 @@ namespace SeeMe
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
+            InitSentry();
+            InitAutoUpdate();
             // 应用级单例主题：所有窗口共享同一 ThemeManager，任一窗口切换主题，
             // 其余窗口通过订阅同一实例的 Changed 事件跟随（见 MainWindow.OnLoaded）。
             GlobalTheme = new ThemeManager();
@@ -31,6 +37,74 @@ namespace SeeMe
 
             var file = e.Args.Length > 0 && File.Exists(e.Args[0]) ? e.Args[0] : null;
             CreateWindow(file);
+        }
+
+        /// <summary>
+        /// 自动更新（Velopack）：VELOPACK_FEED 环境变量指向更新源（如 GitHub Releases 目录），
+        /// 未配置则跳过；后台检查，发现新版本弹窗询问，下载完成后应用并重启。
+        /// VelopackApp.Build().Run() 处理安装/更新后的首次启动钩子（必须最先调用）。
+        /// </summary>
+        private void InitAutoUpdate()
+        {
+            try { VelopackApp.Build().Run(); } catch { }
+
+            var feed = Environment.GetEnvironmentVariable("VELOPACK_FEED");
+            if (string.IsNullOrWhiteSpace(feed)) return;
+
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                try
+                {
+                    var mgr = new UpdateManager(new SimpleWebSource(feed));
+                    if (!mgr.IsInstalled) return;
+                    var cur = mgr.CurrentVersion;
+                    if (cur == null) return;
+                    var idx = await mgr.CheckForUpdatesAsync();
+                    var target = idx?.TargetFullRelease;
+                    if (target == null || target.Version <= cur) return;
+
+                    var ver = target.Version.ToString();
+                    var yes = await Dispatcher.InvokeAsync(() =>
+                        MessageBox.Show($"发现新版本 SeeMe {ver}\n\n当前版本：{cur}\n是否立即下载更新？",
+                            "SeeMe 更新", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes);
+                    if (!yes) return;
+
+                    await mgr.DownloadUpdatesAsync(idx!, null);
+                    mgr.ApplyUpdatesAndExit(target);
+                }
+                catch { /* 更新失败静默，不影响使用 */ }
+            });
+        }
+
+        /// <summary>
+        /// 崩溃上报（Sentry）：仅在环境变量 SEEME_SENTRY_DSN 存在时启用，
+        /// 不硬编码 DSN，未配置则零开销零网络。捕获 WPF 派发线程未处理异常。
+        /// </summary>
+        private void InitSentry()
+        {
+            var dsn = Environment.GetEnvironmentVariable("SEEME_SENTRY_DSN");
+            if (string.IsNullOrWhiteSpace(dsn)) return;
+            try
+            {
+                var ver = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown";
+                SentrySdk.Init(o =>
+                {
+                    o.Dsn = dsn;
+                    o.Environment = "production";
+                    o.Release = $"seeme@{ver}";
+                    o.TracesSampleRate = 0.0;   // 只上报错误，不采集性能轨迹
+                    o.SendDefaultPii = false;   // 不上报个人信息
+                    o.MaxBreadcrumbs = 50;
+                });
+                DispatcherUnhandledException += (_, args) =>
+                {
+                    try { SentrySdk.CaptureException(args.Exception); } catch { }
+                };
+            }
+            catch
+            {
+                // Sentry 初始化失败不影响主程序
+            }
         }
 
         protected override void OnExit(ExitEventArgs e)
@@ -61,7 +135,7 @@ namespace SeeMe
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine("[SeeMe] InitTray: " + ex.Message);
+                SeeMeLog.Info("InitTray", ex.Message);
             }
         }
 

@@ -271,7 +271,7 @@ namespace SeeMe
                     return el.GetString();
                 }
             }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[SeeMe] ThemeManager.LoadSavedTheme: " + ex.Message); }
+            catch (Exception ex) { SeeMeLog.Info("ThemeManager.LoadSavedTheme", ex.Message); }
             return null;
         }
 
@@ -287,7 +287,7 @@ namespace SeeMe
                     return true;
                 }
             }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[SeeMe] ThemeManager.LoadWelcomeDismissed: " + ex.Message); }
+            catch (Exception ex) { SeeMeLog.Info("ThemeManager.LoadWelcomeDismissed", ex.Message); }
             return false;
         }
 
@@ -315,7 +315,7 @@ namespace SeeMe
 
                 File.WriteAllText(StoragePath, obj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
             }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("[SeeMe] ThemeManager.SaveSettings: " + ex.Message); }
+            catch (Exception ex) { SeeMeLog.Info("ThemeManager.SaveSettings", ex.Message); }
         }
 
         /// <summary>读 settings.json 根对象；文件缺失/损坏返回 null。</summary>

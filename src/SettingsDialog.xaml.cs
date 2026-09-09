@@ -30,7 +30,6 @@ namespace SeeMe
         {
             Sec0.Visibility = idx == 0 ? Visibility.Visible : Visibility.Collapsed;
             Sec1.Visibility = idx == 1 ? Visibility.Visible : Visibility.Collapsed;
-            Sec2.Visibility = idx == 2 ? Visibility.Visible : Visibility.Collapsed;
             Sec3.Visibility = idx == 3 ? Visibility.Visible : Visibility.Collapsed;
             Sec4.Visibility = idx == 4 ? Visibility.Visible : Visibility.Collapsed;
             Sec6.Visibility = idx == 6 ? Visibility.Visible : Visibility.Collapsed;
@@ -64,10 +63,9 @@ namespace SeeMe
                 HistorySizeBox.SelectedIndex = hs switch { 10 => 0, 20 => 2, 50 => 3, _ => 1 };
                 var closeB = AppSettings.Get(AppSettings.CloseBehaviorKey, "exit");
                 CloseBehaviorBox.SelectedIndex = closeB == "tray" ? 1 : closeB == "ask" ? 2 : 0;
-                AutoSaveBox.IsChecked = AppSettings.Get(AppSettings.AutoSaveKey, true);
+                var autoOn = AppSettings.Get(AppSettings.AutoSaveKey, true);
                 var autoDelay = AppSettings.Get(AppSettings.AutoSaveDelayKey, 10);
-                AutoSaveDelayBox.SelectedIndex = autoDelay switch { 5 => 0, 30 => 2, _ => 1 };
-                AutoSaveDelayBox.IsEnabled = AutoSaveBox.IsChecked == true;
+                AutoSaveBehaviorBox.SelectedIndex = !autoOn ? 0 : autoDelay switch { 5 => 1, 30 => 3, _ => 2 };
 
                 // 外观
                 var mode = AppSettings.Get(AppSettings.ThemeModeKey, "light");
@@ -81,19 +79,17 @@ namespace SeeMe
                 if (accent == "blue") AccentBlue.IsChecked = true;
                 else if (accent == "green") AccentGreen.IsChecked = true;
                 else AccentIndigo.IsChecked = true;
-                AnimationsBox.IsChecked = _owner.ThemeAnimationsEnabled;
+                AnimationsBox.SelectedIndex = _owner.ThemeAnimationsEnabled ? 1 : 0;
                 var fs = AppSettings.Get(AppSettings.FontSizeKey, 14);
                 FontSizeBox.SelectedIndex = fs switch { 13 => 0, 16 => 2, 18 => 3, _ => 1 };
                 var lh = AppSettings.Get(AppSettings.LineHeightKey, 1.65);
                 RowHeightBox.SelectedIndex = lh >= 2.0 ? 2 : lh <= 1.4 ? 0 : 1;
 
-                // 阅读
-                CssPathBox.Text = AppSettings.Get(AppSettings.CustomCssKey, "");
-                var mdStyle = AppSettings.Get(AppSettings.MdStyleKey, "default");
-                if (mdStyle == "github") StyleGithub.IsChecked = true;
-                else if (mdStyle == "simple") StyleSimple.IsChecked = true;
-                else StyleDefault.IsChecked = true;
-                EyeCareBox.IsChecked = AppSettings.Get(AppSettings.EyeCareKey, false);
+                // PDF 导出
+                PdfIncludeTocBox.SelectedIndex = AppSettings.Get(AppSettings.PdfIncludeTocKey, true) ? 1 : 0;
+                PdfPageNumberBox.SelectedIndex = AppSettings.Get(AppSettings.PdfPageNumberKey, true) ? 1 : 0;
+                PdfWatermarkBox.SelectedIndex = AppSettings.Get(AppSettings.PdfWatermarkKey, false) ? 1 : 0;
+                PdfWatermarkTextBox.Text = AppSettings.Get(AppSettings.PdfWatermarkTextKey, "");
 
                 // 快捷键
                 FillKeymap();
@@ -107,7 +103,7 @@ namespace SeeMe
                 ExportPathBox.IsEnabled = fixedMode;
 
                 // 高级
-                DevToolsBox.IsChecked = AppSettings.Get(AppSettings.DevToolsKey, false);
+                DevToolsBox.SelectedIndex = AppSettings.Get(AppSettings.DevToolsKey, false) ? 1 : 0;
 
                 // 高级 / 关于
                 var dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SeeMe");
@@ -121,7 +117,7 @@ namespace SeeMe
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine("[SeeMe] SettingsDialog.LoadValues: " + ex.Message);
+                SeeMeLog.Info("SettingsDialog.LoadValues", ex.Message);
             }
             finally
             {
@@ -159,32 +155,18 @@ namespace SeeMe
             _owner.ApplyAccentNow(accent);
         }
 
-        private void OnMdStyleChanged(object sender, RoutedEventArgs e)
+        private void OnAnimationsChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (_loading || sender is not RadioButton rb || rb.IsChecked != true) return;
-            var style = rb == StyleGithub ? "github" : rb == StyleSimple ? "simple" : "default";
-            AppSettings.Set(AppSettings.MdStyleKey, style);
-            _owner.ApplyMdStyleNow(style);
+            if (_loading || AnimationsBox.SelectedIndex < 0) return;
+            var on = AnimationsBox.SelectedIndex == 1;
+            AppSettings.Set(AppSettings.AnimationsKey, on);
+            _owner.ApplyAnimationsNow(on);
         }
 
-        private void OnEyeCareChanged(object sender, RoutedEventArgs e)
+        private void OnDevToolsChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (_loading || sender is not CheckBox cb) return;
-            AppSettings.Set(AppSettings.EyeCareKey, cb.IsChecked == true);
-            _owner.ApplyEyeCareNow(cb.IsChecked == true);
-        }
-
-        private void OnAnimationsChanged(object sender, RoutedEventArgs e)
-        {
-            if (_loading || sender is not CheckBox cb) return;
-            AppSettings.Set(AppSettings.AnimationsKey, cb.IsChecked == true);
-            _owner.ApplyAnimationsNow(cb.IsChecked == true);
-        }
-
-        private void OnDevToolsChanged(object sender, RoutedEventArgs e)
-        {
-            if (_loading || sender is not CheckBox cb) return;
-            AppSettings.Set(AppSettings.DevToolsKey, cb.IsChecked == true);
+            if (_loading || DevToolsBox.SelectedIndex < 0) return;
+            AppSettings.Set(AppSettings.DevToolsKey, DevToolsBox.SelectedIndex == 1);
         }
 
         private void OnFontSizeChanged(object sender, SelectionChangedEventArgs e)
@@ -258,21 +240,15 @@ namespace SeeMe
             RefreshCacheInfo();
         }
 
-        private void StatusBarHint(string msg) => System.Diagnostics.Debug.WriteLine("[SeeMe] " + msg);
+        private void StatusBarHint(string msg) => SeeMeLog.Info(msg);
 
-        private void OnAutoSaveChanged(object sender, RoutedEventArgs e)
+        private void OnAutoSaveBehaviorChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (_loading || sender is not CheckBox cb) return;
-            AppSettings.Set(AppSettings.AutoSaveKey, cb.IsChecked == true);
-            AutoSaveDelayBox.IsEnabled = cb.IsChecked == true; // 关闭自动保存时禁用间隔选择
-            _owner.ApplyAutoSaveSettingsNow(); // 正在编辑的面板即时生效
-        }
-
-        private void OnAutoSaveDelayChanged(object sender, SelectionChangedEventArgs e)
-        {
-            if (_loading || AutoSaveDelayBox.SelectedIndex < 0) return;
-            var s = AutoSaveDelayBox.SelectedIndex switch { 0 => 5, 2 => 30, _ => 10 };
-            AppSettings.Set(AppSettings.AutoSaveDelayKey, s);
+            if (_loading || AutoSaveBehaviorBox.SelectedIndex < 0) return;
+            var idx = AutoSaveBehaviorBox.SelectedIndex;
+            AppSettings.Set(AppSettings.AutoSaveKey, idx > 0);
+            var delay = idx switch { 1 => 5, 3 => 30, _ => 10 };
+            AppSettings.Set(AppSettings.AutoSaveDelayKey, delay);
             _owner.ApplyAutoSaveSettingsNow(); // 正在编辑的面板即时生效
         }
 
@@ -382,28 +358,6 @@ namespace SeeMe
             _owner.ApplyInfoPanelDefault();
         }
 
-        // ──────────────── 阅读 ────────────────
-
-        private void OnPickCss(object sender, RoutedEventArgs e)
-        {
-            var dlg = new Microsoft.Win32.OpenFileDialog
-            {
-                Filter = "CSS 文件 (*.css)|*.css|所有文件 (*.*)|*.*",
-                Title = "选择自定义样式文件"
-            };
-            if (dlg.ShowDialog(this) == true)
-            {
-                CssPathBox.Text = dlg.FileName;
-                _owner.ApplyCustomCssNow(dlg.FileName);
-            }
-        }
-
-        private void OnClearCss(object sender, RoutedEventArgs e)
-        {
-            CssPathBox.Text = "";
-            _owner.ApplyCustomCssNow("");
-        }
-
         // ──────────────── 导出 ────────────────
 
         private void OnImageFormatChanged(object sender, SelectionChangedEventArgs e)
@@ -433,6 +387,58 @@ namespace SeeMe
             {
                 ExportPathBox.Text = dlg.FolderName;
                 AppSettings.Set(AppSettings.ExportPathKey, dlg.FolderName);
+            }
+        }
+
+        // ──────────────── PDF 导出 ────────────────
+
+        private void OnPdfIncludeTocChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_loading || PdfIncludeTocBox.SelectedIndex < 0) return;
+            AppSettings.Set(AppSettings.PdfIncludeTocKey, PdfIncludeTocBox.SelectedIndex == 1);
+        }
+
+        private void OnPdfPageNumberChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_loading || PdfPageNumberBox.SelectedIndex < 0) return;
+            AppSettings.Set(AppSettings.PdfPageNumberKey, PdfPageNumberBox.SelectedIndex == 1);
+        }
+
+        private void OnPdfWatermarkChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_loading || PdfWatermarkBox.SelectedIndex < 0) return;
+            AppSettings.Set(AppSettings.PdfWatermarkKey, PdfWatermarkBox.SelectedIndex == 1);
+        }
+
+        private void OnPdfWatermarkTextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (_loading) return;
+            AppSettings.Set(AppSettings.PdfWatermarkTextKey, PdfWatermarkTextBox.Text ?? "");
+        }
+
+        private void OnExportPdf(object sender, RoutedEventArgs e)
+        {
+            var dlg = new Microsoft.Win32.SaveFileDialog
+            {
+                Filter = "PDF 文件 (*.pdf)|*.pdf",
+                Title = "导出为 PDF",
+                FileName = (_owner.CurrentFileName ?? "untitled") + ".pdf"
+            };
+            if (dlg.ShowDialog(this) != true) return;
+            PdfExportHint.Text = "正在导出…";
+            try
+            {
+                _owner.ExportActivePanelToPdf(dlg.FileName,
+                    includeToc: AppSettings.Get(AppSettings.PdfIncludeTocKey, true),
+                    showPageNumber: AppSettings.Get(AppSettings.PdfPageNumberKey, true),
+                    enableWatermark: AppSettings.Get(AppSettings.PdfWatermarkKey, false),
+                    watermarkText: AppSettings.Get(AppSettings.PdfWatermarkTextKey, ""));
+                PdfExportHint.Text = "导出完成：" + dlg.FileName;
+            }
+            catch (Exception ex)
+            {
+                PdfExportHint.Text = "导出失败：" + ex.Message;
+                SeeMeLog.Info("PDF 导出", ex.ToString());
             }
         }
 

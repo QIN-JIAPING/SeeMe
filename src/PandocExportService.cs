@@ -171,41 +171,19 @@ namespace SeeMe
                 var dir = Path.GetDirectoryName(inputPath) ?? ".";
                 var name = Path.GetFileNameWithoutExtension(inputPath);
                 format ??= "docx";
-                var ext = format switch
-                {
-                    "docx" => ".docx",
-                    "pdf" => ".pdf",
-                    "latex" or "tex" => ".tex",
-                    "html" => ".html",
-                    "epub" => ".epub",
-                    "rst" => ".rst",
-                    "markdown" or "md" => ".md",
-                    _ => "." + format
-                };
+                var ext = SupportedExportFormats.FromFormat(format)?.Ext ?? "." + format;
                 outputPath = Path.Combine(dir, name + "_exported" + ext);
             }
 
             // 从输出路径推断格式
             if (string.IsNullOrEmpty(format))
             {
-                format = Path.GetExtension(outputPath).TrimStart('.').ToLowerInvariant();
-                format = format switch
-                {
-                    "docx" => "docx",
-                    "pdf" => "pdf",
-                    "tex" => "latex",
-                    "html" or "htm" => "html",
-                    "epub" => "epub",
-                    "rst" => "rst",
-                    "md" or "markdown" => "markdown",
-                    _ => format
-                };
+                format = SupportedExportFormats.FromExt(Path.GetExtension(outputPath))?.Format
+                         ?? Path.GetExtension(outputPath).TrimStart('.').ToLowerInvariant();
             }
 
-            // 白名单校验：仅允许已知安全格式，防止 format 注入额外 pandoc 参数导致 RCE。
-            var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                { "docx", "pdf", "latex", "html", "epub", "markdown", "rst" };
-            if (!allowed.Contains(format))
+            // 白名单校验（单一来源 SupportedExportFormats）：仅允许已知安全格式，防止 format 注入额外 pandoc 参数导致 RCE。
+            if (!SupportedExportFormats.IsAllowed(format))
                 return (false, "不支持的导出格式: " + (format ?? "(空)"));
 
             try

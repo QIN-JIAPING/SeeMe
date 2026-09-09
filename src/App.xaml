@@ -24,6 +24,8 @@
         <SolidColorBrush x:Key="TitleBarActiveBackgroundBrush" Color="#EEF0FF"/>
         <SolidColorBrush x:Key="ItemHoverBrush"            Color="#F4F5FF"/>
         <SolidColorBrush x:Key="ItemSelectedBrush"         Color="#E0E3FF"/>
+        <SolidColorBrush x:Key="SegTrackBrush"             Color="#E9EDF4"/>
+        <SolidColorBrush x:Key="SegPillBrush"              Color="#FFFFFF"/>
         <SolidColorBrush x:Key="DangerBrush"               Color="#EF4444"/>
 
         <!-- ═══════════════ 圆角 token（统一 16/12/10/8 四档，全项目复用） ═══════════════ -->
@@ -66,19 +68,6 @@
         <Geometry x:Key="IconChevronRight">M9,6 L15,12 L9,18</Geometry>
         <!-- 折叠最近文件 -->
         <Geometry x:Key="IconChevronDown">M6,9 L12,15 L18,9</Geometry>
-        <!-- 设置：三条滑杆 + 圆钮（设置入口按钮用） -->
-        <Geometry x:Key="IconGear">
-            M4,9 A1.5,1.5 0 1,0 4,12 A1.5,1.5 0 1,0 4,9 Z M7,10.5 H21
-            M12,15 A1.5,1.5 0 1,0 12,18 A1.5,1.5 0 1,0 12,15 Z M15,16.5 H21
-            M20,21 A1.5,1.5 0 1,0 20,24 A1.5,1.5 0 1,0 20,21 Z M3,22.5 H17
-        </Geometry>
-        <!-- 色板/自定义样式：圆角方块 + 三点（CSS 按钮用，与主题按钮图标风格一致） -->
-        <Geometry x:Key="IconPalette">
-            M4,6 A2.5,2.5 0 0,1 6.5,3.5 L17.5,3.5 A2.5,2.5 0 0,1 20,6 L20,17.5 A2.5,2.5 0 0,1 17.5,20 L6.5,20 A2.5,2.5 0 0,1 4,17.5 Z
-            M8.5,10 A1.5,1.5 0 1,0 8.5,13 A1.5,1.5 0 1,0 8.5,10 Z
-            M12,10 A1.5,1.5 0 1,0 12,13 A1.5,1.5 0 1,0 12,10 Z
-            M15.5,10 A1.5,1.5 0 1,0 15.5,13 A1.5,1.5 0 1,0 15.5,10 Z
-        </Geometry>
         <!-- 高亮笔：荧光笔斜尖（选中文本标注入口） -->
         <Geometry x:Key="IconHighlight">
             M6.5,21.5 L3,18 L15.5,5.5 L19,9 Z
@@ -102,11 +91,6 @@
         <Geometry x:Key="IconSearch">
             M10,3 A7,7 0 1,0 10,17 A7,7 0 1,0 10,3
             M15.5,15.5 L21,21
-        </Geometry>
-        <!-- 刷新/重载：圆弧箭头，顺时针旋转 -->
-        <Geometry x:Key="IconRefresh">
-            M17.65,6.35 C16.2,4.9 14.21,4 12,4 A8,8 0 0,0 4,12 A8,8 0 0,0 12,20
-            C15.73,20 18.84,17.45 19.73,14 M17,1 V7 H23
         </Geometry>
 
         <!-- ═══════════════ 样式（用 DynamicResource 确保主题切换时引用跟随） ═══════════════ -->
@@ -248,6 +232,43 @@
                                 <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
                                 <Setter TargetName="bd" Property="Background" Value="{DynamicResource ItemHoverBrush}"/>
                             </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 分段 Tab 按钮（文件/大纲/标注）：放在灰轨道 Border 内，选中项由代码后台铺 SegPillBrush
+             并打 Tag="on" 标记——Tag 非空时抑制 hover/pressed 底色，避免选中胶囊悬停变色穿帮 -->
+        <Style x:Key="SegTabBtn" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Height" Value="24"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextBodyBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd" Background="{TemplateBinding Background}"
+                                CornerRadius="7" SnapsToDevicePixels="True">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsMouseOver" Value="True"/>
+                                    <Condition Property="Tag" Value="{x:Null}"/>
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource ItemHoverBrush}"/>
+                            </MultiTrigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsPressed" Value="True"/>
+                                    <Condition Property="Tag" Value="{x:Null}"/>
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource ItemSelectedBrush}"/>
+                            </MultiTrigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>

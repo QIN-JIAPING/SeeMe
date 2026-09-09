@@ -2,7 +2,7 @@
 
 一个 Windows 桌面文档查看器，基于 **WPF + WebView2**。以 Markdown 为核心，并扩展支持 Office 文档与 PDF 的「所见即所得」预览。
 
-> 当前版本：**v1.0.3** ｜ 技术栈：.NET 8.0 (Windows) · WPF · WebView2 · Markdig · OpenXML · PdfPig · anydoc-wasm
+> 当前版本：**v1.0.3** ｜ 技术栈：.NET 8.0 (Windows) · WPF · WebView2 · Markdig · OpenXML · PdfPig · anydoc-wasm · ECharts · markmap · docx-preview · Univer · Lucene.NET · Velopack · Sentry
 
 ---
 
@@ -10,7 +10,7 @@
 
 | 类别 | 说明 |
 |------|------|
-| **Markdown 渲染** | Markdig 高级管线：管道表格 / 网格表格 / 任务列表 / 自动链接 / 自动锚点 / Emoji；代码高亮（Prism）、数学公式（KaTeX）、流程图（Mermaid）离线渲染；禁用原始 HTML 以保证安全 |
+| **Markdown 渲染** | Markdig 高级管线：管道表格 / 网格表格 / 任务列表 / 自动链接 / 自动锚点 / Emoji；代码高亮（Prism）、数学公式（KaTeX）、流程图（Mermaid）、**数据图表（ECharts）**、**思维导图（markmap）** 离线渲染；禁用原始 HTML 以保证安全 |
 | **多格式文档** | 直接预览 `.md`、Word(`.docx/.doc/.docm/.rtf/.odt`)、Excel(`.xlsx/.xls/.xlsm/.ods/.csv`)、PowerPoint(`.pptx/.ppt/.odp`)、电子书(`.epub`)、PDF(`.pdf`)，统一 HTML 呈现 |
 | **PDF 文本视图** | PDF.js 逐页图文重建：文本行 + 图片按 y 坐标交错排版，点击图片超采样放大；扫描版无文本层自动标记 |
 | **目录大纲** | 左侧「大纲」Tab：Markdown 按标题层级生成，点击平滑滚动到锚点；PDF 用书签/标题重建 |
@@ -18,12 +18,14 @@
 | **笔记** | 用户自由输入的笔记：添加 / 修改（自动保存）/ 删除 / 清除，按文件持久化 `notes.json`，一键导出 Markdown |
 | **高亮笔标注** | 选中文本即高亮（md / Office / PDF），右键删除，重启后按文本恢复；开关状态持久化 |
 | **编辑自动保存** | 文本类与 docx 内联编辑，输入停顿 5/10/30 秒自动落盘（可开关），● 未保存指示，退出/切文件不丢字 |
-| **内容搜索** | 搜索框输入 `>关键词` 扫描历史文件内容（限量 256KB/文件），命中 PDF 文本层 |
+| **内容搜索** | 搜索框输入 `>关键词` 走 **Lucene.NET 全文索引**（秒级检索历史文件，限量 256KB/文件，文件变化自动重建索引），命中 PDF 文本层 |
+| **自动更新** | Velopack 增量更新：启动后台检查更新源（`VELOPACK_FEED` 环境变量），发现新版本弹窗下载并重启应用 |
+| **崩溃上报** | Sentry：设置 `SEEME_SENTRY_DSN` 环境变量后启用，未配置零开销；WPF 派发线程未处理异常自动上报 |
 | **打印** | Ctrl+P 调系统打印对话框，Markdown / Office / PDF 文本视图统一 DOM 打印 |
 | **文件关联** | 设置页一键设为 .md 默认查看器 + 注册资源管理器右键菜单「用 SeeMe 打开」（HKCU，免管理员） |
 | **双栏分屏** | 左右双面板对照阅读，可独立打开不同文件；右栏无文件时自动收折不占空间 |
 | **自动刷新** | `FileSystemWatcher` + 防抖，源文件改动即时刷新 |
-| **明 / 暗主题** | 完整主题色板（亮 / 暗，含护眼模式），偏好持久化到 `settings.json` |
+| **明 / 暗主题** | 完整主题色板（亮 / 暗），偏好持久化到 `settings.json` |
 | **缩放 & 滚动记忆** | 字体缩放（`FontScale`）、滚动位置记忆（`LastScrollY`）随文件恢复 |
 | **文件历史 & 书签** | 最近 15 个打开记录；右键收藏书签置顶；反向链接展示引用当前文件的文档 |
 | **YAML Front Matter** | Markdown 头部的 YAML 元信息渲染为信息卡片 |
@@ -38,9 +40,9 @@
 
 | 类别 | 扩展名 | 渲染方式 | 回退 |
 |------|--------|----------|------|
-| 📝 Markdown | `.md` `.markdown` `.mkd` `.mdown` | Markdig 直渲（主题化 CSS + Prism/KaTeX/Mermaid） | — |
-| 📄 Word | `.docx` `.doc` `.docm` `.rtf` `.odt` | anydoc-wasm → Markdown → Markdig | OpenXML 解析 |
-| 📊 Excel | `.xlsx` `.xls` `.xlsm` `.ods` `.csv` | anydoc-wasm → Markdown → Markdig | OpenXML 解析（`.xls` 仅 OpenXML） |
+| 📝 Markdown | `.md` `.markdown` `.mkd` `.mdown` | Markdig 直渲（主题化 CSS + Prism/KaTeX/Mermaid/ECharts/markmap） | — |
+| 📄 Word | `.docx` `.doc` `.docm` `.rtf` `.odt` | anydoc-wasm → Markdown → Markdig | docx-preview 高保真渲染（`.docx`）／OpenXML 解析 |
+| 📊 Excel | `.xlsx` `.xls` `.xlsm` `.ods` `.csv` | **Univer 原生渲染（`.xlsx/.xlsm`，多 sheet/公式/样式保留）**；其余 anydoc-wasm → Markdown | OpenXML 解析（`.xls` 仅 OpenXML） |
 | 📽 PowerPoint | `.pptx` `.ppt` `.odp` | anydoc-wasm → Markdown → Markdig | OpenXML 解析 |
 | 📚 电子书 | `.epub` | anydoc-wasm → Markdown → Markdig | 错误页 |
 | 📕 PDF | `.pdf` | PDF.js 逐页图文重建（文本层、缩放、大纲、页内查找） | — |
@@ -48,6 +50,12 @@
 > **说明**：
 > - **anydoc-wasm**：页内 WebAssembly 转换器，覆盖 Office 12 种格式；失败或 5s 超时自动回退右侧列。
 > - **宏文档变体**：`.docm` / `.xlsm` 含宏，仅解析内容不执行宏，映射到 docx/xlsx 解析器。
+
+### 📊 Markdown 扩展围栏
+
+- ```` ```echarts ````：围栏内写 ECharts option JSON，渲染为交互图表（随明/暗主题切换）。
+- ```` ```markmap ````：围栏内写 Markdown 标题文本，渲染为可缩放思维导图。
+- 左侧「大纲」Tab 顶部的 **🗺 导图** 按钮：把当前文档标题结构一键切换为思维导图视图。
 
 ---
 

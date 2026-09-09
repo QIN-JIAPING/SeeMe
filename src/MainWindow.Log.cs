@@ -40,7 +40,10 @@ namespace SeeMe
                     if (File.Exists(oldPath)) File.Delete(oldPath);
                     File.Move(logPath, oldPath);
                 }
-                var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [{level}] {msg}{Environment.NewLine}";
+                // 日志伪造防护：文件名/URL 等外部来源字符串可能含 \r\n，
+                // 先净化成转义形式，保证一条日志恒为一行
+                var safe = msg.Replace("\r", "\\r").Replace("\n", "\\n");
+                var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [{level}] {safe}{Environment.NewLine}";
                 File.AppendAllText(logPath, line);
             }
             catch { }
