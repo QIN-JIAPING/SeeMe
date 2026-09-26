@@ -26,9 +26,7 @@ namespace SeeMe
     /// </summary>
     public class HighlightStore : JsonListStore<HighlightItem>, IHighlightStore
     {
-        private static string DefaultStoragePath =>
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "SeeMe", "highlights.json");
+        private static string DefaultStoragePath => StoragePaths.Combine("highlights.json");
 
         public IReadOnlyList<HighlightItem> Items => _items;
 

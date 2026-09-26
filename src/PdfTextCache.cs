@@ -18,9 +18,7 @@ namespace SeeMe
     /// </summary>
     public static class PdfTextCache
     {
-        private static string DefaultCacheDir => Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "SeeMe", "pdftext");
+        private static string DefaultCacheDir => Path.Combine(StoragePaths.Root, "pdftext");
 
         private static string? _cacheDirOverride;
 

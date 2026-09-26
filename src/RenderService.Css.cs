@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2026 QIN-JIAPING
+// Copyright (c) 2026 QIN-JIAPING
 // SPDX-License-Identifier: MIT
 
 using System;
@@ -14,7 +14,7 @@ namespace SeeMe
     /// <summary>RenderService 分部类：CSS 生成（主题变量 / 页面外壳 / 文档排版唯一来源）。</summary>
     public partial class RenderService
     {
-        /// <summary>鐢熸垚 :root锛堜寒锛?+ html.dark锛堟殫锛夊弻濂? CSS 鍙橀噺鍧楋紙鍞竴鏉ユ簮 ThemeColors锛夈??</summary>
+        /// <summary>生成 :root（亮）+ html.dark（暗）双套 CSS 变量块（唯一来源 ThemeColors）。</summary>
         public static string ThemeCss() => ThemeColors.ThemeCss();
 
         /// <summary>页级 CSS reset（占位页/桥接页共用唯一来源）：margin/padding 清零 + 统一盒模型。</summary>
@@ -26,8 +26,6 @@ namespace SeeMe
             " border-radius:50%; display:inline-block; animation:spin .8s linear infinite; vertical-align:middle; }" +
             "@keyframes spin { to { transform:rotate(360deg); } }";
 
-        /// <summary>Markdown/Office/PDF 文档排版 CSS（标题/段落/引用/代码/表格/图片）。
-        /// 字号用相对单位随 body 缩放；Office 与 PDF 文本视图共用，保证观感一致。</summary>
         /// <summary>
         /// 文档排版共享核心（标题层级 / 引用块 / 图片基础）——Markdown 页与 Office/PDF 桥接页的唯一来源。
         /// office=true 时选择器带 ".content " 前缀（Office/PDF 页内容包裹在 .content 中）。

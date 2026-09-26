@@ -1,0 +1,41 @@
+# .gitattributes — 行尾与文本处理策略
+#
+# 背景：SeeMe.Tests/fixtures/markdown/ 下的文件是**编码探测语料**，
+# 其价值完全依赖原始字节（BOM、GBK 双字节、CRLF）。Git 的自动行尾转换
+# （core.autocrlf=true 在 Windows 上默认开启）会改写这些字节，
+# 导致 TextEncodingTests 静默失效 —— 测试仍通过，但已不再覆盖目标分支。
+#
+# 配套防护：SeeMe.Tests/FixtureIntegrityTests.cs 会字节级校验这些文件，
+# 任何漂移立即失败。两层防护必须同时存在。
+
+# ── 默认：自动识别文本文件，仓库内统一存 LF ──
+* text=auto
+
+# ── 源码：明确按文本处理，仓库内为 LF ──
+*.cs       text diff=csharp
+*.xaml     text
+*.csproj   text
+*.md       text
+*.json     text
+*.cmd      text
+*.ps1      text
+*.py       text
+*.yml      text
+*.nsi      text
+
+# ── 测试语料：禁止任何行尾转换，字节原样存盘 ──
+SeeMe.Tests/fixtures/**  binary
+
+# ── 二进制资源：不要做 diff 与行尾处理 ──
+*.png      binary
+*.ico      binary
+*.bmp      binary
+*.exe      binary
+*.dll      binary
+*.zip      binary
+*.woff2    binary
+*.pfb      binary
+*.bcmap    binary
+
+# ── 工具产物：不要出现在 diff 与语言统计里 ──
+tools/*.bmp linguist-vendored

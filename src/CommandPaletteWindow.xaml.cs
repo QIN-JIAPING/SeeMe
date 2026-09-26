@@ -126,6 +126,7 @@ namespace SeeMe
             _all.Add(Mk("视图", "缩小", "Ctrl+-", () => o.SetZoomActiveDelta(-0.1)));
             _all.Add(Mk("视图", "显示 / 隐藏信息面板", "", () => o.ToggleInfoPanel()));
             _all.Add(Mk("视图", "显示 / 隐藏笔记面板", "", () => o.ToggleNotesPanel()));
+            _all.Add(Mk("视图", "浮动大纲（随滚动跟随）", "", () => o.ToggleOutlineFloatPublic()));
             // ── 标注 / 编辑 ──
             _all.Add(Mk("标注", "高亮笔开关（当前面板）", "", () => o.ToggleHighlightPen()));
             _all.Add(Mk("标注", "查看全部标注（左侧 Tab）", "", () => o.ActivateSideTabPublic(2)));

@@ -105,11 +105,13 @@ namespace SeeMe
                 // 高级
                 DevToolsBox.SelectedIndex = AppSettings.Get(AppSettings.DevToolsKey, false) ? 1 : 0;
 
-                // 高级 / 关于
-                var dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SeeMe");
+                // 高级 / 关于：数据目录经 StoragePaths 解析（便携模式下指向程序目录下的 data\，
+                // 而非 AppData）—— 这里显示的是**真实生效**的目录，与各存储类一致。
+                var dataDir = StoragePaths.Root;
                 DataDirBox.Text = dataDir;
                 AboutDataDir.Text = dataDir;
                 AboutInstallDir.Text = AppDomain.CurrentDomain.BaseDirectory;
+                RefreshPortableUi();
                 var ver = typeof(SettingsDialog).Assembly.GetName().Version;
                 AboutVersion.Text = "SeeMe " + (ver?.ToString(3) ?? "1.0.1") + " · 多格式文档查看器";
                 RefreshCacheInfo();
@@ -167,6 +169,120 @@ namespace SeeMe
         {
             if (_loading || DevToolsBox.SelectedIndex < 0) return;
             AppSettings.Set(AppSettings.DevToolsKey, DevToolsBox.SelectedIndex == 1);
+        }
+
+        // ──────────────── 便携模式 ────────────────
+
+        /// <summary>
+        /// 刷新便携模式区块：下拉选中态 + 不安全的场景警告。
+        ///
+        /// <para><b>为什么要做可写性探测并在 UI 上警告</b>：程序装在 <c>C:\Program Files\</c> 时
+        /// <c>portable.flag</c> 能建，但写 <c>data\</c> 会被 UAC 虚化重定向到
+        /// <c>%LOCALAPPDATA%\VirtualStore\</c> —— 用户以为"便携"了，实际数据仍散落在系统盘，
+        /// 换台机器就全丢。这种"静默失败"必须在设置页明说。</para>
+        /// </summary>
+        private void RefreshPortableUi()
+        {
+            PortableBox.SelectedIndex = StoragePaths.IsPortable ? 1 : 0;
+            UpdatePortableWarning();
+        }
+
+        private void UpdatePortableWarning()
+        {
+            if (PortableWarnText == null) return;
+            if (!StoragePaths.IsPortable)
+            {
+                PortableWarnText.Visibility = Visibility.Collapsed;
+                return;
+            }
+            if (StoragePaths.ProbePortableWritable())
+            {
+                PortableWarnText.Visibility = Visibility.Collapsed;
+                return;
+            }
+            PortableWarnText.Text = "⚠ 程序目录不可写，便携数据将无法保存。"
+                + "请把程序移到用户可写的目录（如 D 盘），或改回关闭便携模式。";
+            PortableWarnText.Visibility = Visibility.Visible;
+        }
+
+        private void OnPortableChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_loading || PortableBox.SelectedIndex < 0) return;
+            var enable = PortableBox.SelectedIndex == 1;
+
+            // 开启前先确认目标目录真的可写，避免用户开了却存不下数据
+            if (enable)
+            {
+                var probeDir = Path.Combine(StoragePaths.AppDirectory, StoragePaths.PortableDataDirName);
+                if (!IsDirectoryWritable(probeDir))
+                {
+                    MessageBox.Show(
+                        "程序所在目录不可写（常见于安装在 C:\\Program Files 的情况）。\n\n"
+                        + "便携模式的数据需要保存在程序目录下的 data\\ 里，请先把程序移动到"
+                        + "用户可写的位置（例如 D 盘），或改用普通模式。",
+                        "无法开启便携模式", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    _loading = true;
+                    PortableBox.SelectedIndex = 0;
+                    _loading = false;
+                    return;
+                }
+            }
+
+            if (!StoragePaths.SetPortable(enable))
+            {
+                MessageBox.Show("切换便携模式失败：无法写入程序目录。", "操作失败",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                _loading = true;
+                PortableBox.SelectedIndex = StoragePaths.IsPortable ? 1 : 0;
+                _loading = false;
+                return;
+            }
+
+            var dataDir = StoragePaths.Root;
+            DataDirBox.Text = dataDir;
+            AboutDataDir.Text = dataDir;
+            UpdatePortableWarning();
+
+            var tip = enable
+                ? "已开启便携模式，数据目录：" + dataDir
+                  + "\n\n⚠ 原有数据不会自动迁移。若需要保留，请点「迁移现有数据」。\n重启应用后完全生效。"
+                : "已关闭便携模式，数据将存回：" + dataDir + "\n重启应用后完全生效。";
+            MessageBox.Show(tip, "便携模式", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        /// <summary>把 AppData 里的既有数据复制进便携目录（只复制不删除源）。</summary>
+        private void OnPortableMigrate(object sender, RoutedEventArgs e)
+        {
+            if (!StoragePaths.IsPortable)
+            {
+                MessageBox.Show("请先开启便携模式，再执行迁移。", "提示",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            var n = StoragePaths.CopyAppDataToPortable();
+            MessageBox.Show(n > 0
+                    ? $"已迁移 {n} 个文件到：\n{Path.Combine(StoragePaths.AppDirectory, StoragePaths.PortableDataDirName)}"
+                      + "\n\n原 AppData 目录中的文件仍然保留，确认无误后可自行删除。"
+                    : "没有可迁移的文件（AppData 中未找到 SeeMe 数据，或便携目录中已存在同名文件）。",
+                "迁移完成", MessageBoxButton.OK, MessageBoxImage.Information);
+            RefreshPortableUi();
+        }
+
+        /// <summary>
+        /// 探测目录能否真实写入（先建目录再试写一个临时文件）。
+        /// 不用 <c>Directory.Exists</c> + 权限位判断 —— UAC 虚化会让"看起来能写"的目录实际写进 VirtualStore。
+        /// </summary>
+        private static bool IsDirectoryWritable(string dir)
+        {
+            try
+            {
+                Directory.CreateDirectory(dir);
+                var probe = Path.Combine(dir, ".write-probe");
+                File.WriteAllText(probe, "ok");
+                File.Delete(probe);
+                return true;
+            }
+            catch { return false; }
         }
 
         private void OnFontSizeChanged(object sender, SelectionChangedEventArgs e)
@@ -438,7 +554,8 @@ namespace SeeMe
             catch (Exception ex)
             {
                 PdfExportHint.Text = "导出失败：" + ex.Message;
-                SeeMeLog.Info("PDF 导出", ex.ToString());
+                // UI 已提示，但仍落盘：用户关掉对话框后 Message 不足以定位根因。
+                SeeMeLog.Error("PDF 导出", ex);
             }
         }
 

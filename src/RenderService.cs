@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2026 QIN-JIAPING
+// Copyright (c) 2026 QIN-JIAPING
 // SPDX-License-Identifier: MIT
 
 using System;
@@ -14,7 +14,7 @@ namespace SeeMe
 {
     public partial class RenderService : IRenderService
     {
-        /// <summary>WebView2 铏氭嫙涓绘満鍚嶏紝鏄犲皠鍒版湰鍦? Resources 鐩綍锛岀敤浜庡畨鍏ㄥ姞杞界绾? JS/CSS/瀛椾綋锛岄伩鍏? file: 鍗忚銆?</summary>
+        /// <summary>WebView2 虚拟主机名，映射到本地 Resources 目录，用于安全加载离线 JS/CSS/字体，避免 file: 协议。</summary>
         public const string VirtualHost = "appassets.example";
 
         /// <summary>
@@ -37,7 +37,7 @@ namespace SeeMe
             .UseAutoLinks()
             .UseAutoIdentifiers()
             .UseEmojiAndSmiley()
-            .UseMathematics()  // KaTeX 鏁板鍏紡鏀寔锛?$$...$$ 涓? $...$
+            .UseMathematics()  // KaTeX 数学公式支持（$$...$$ 与 $...$）
             .DisableHtml()
             .Build();
 
@@ -81,12 +81,18 @@ namespace SeeMe
             @"<pre class=""code-block""[^>]*><code class=""language-(?<lang>echarts|markmap)""[^>]*>(?<body>[\s\S]*?)</code></pre>",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+        // 已升级的代码块（UpgradePreBlocks 输出）：分离 pre 属性 / code 属性 / 正文，供 AddCodeLineNumbers 逐行包裹。
+        // pre 属性用 [^>]* 吞掉 have-lines 与 spellcheck 等；code 属性同理。正文非贪婪，配合 IgnoreCase 覆盖 </CODE>。
+        private static readonly Regex CodeBlockRegex = new(
+            @"<pre class=""code-block""(?<attrs>[^>]*)><code(?<codeAttrs>[^>]*)>(?<body>[\s\S]*?)</code></pre>",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         public string ProcessRelativePaths(string html, string? baseDir)
         {
             if (string.IsNullOrEmpty(baseDir)) return html;
             return ImgTagRegex.Replace(html, m =>
             {
-                // 鍓ョ on*/style 鍗遍櫓灞炴?э紝浠呬繚鐣欏畨鍏ㄥ睘鎬у洖鍐?
+                // 剥离 on*/style 危险属性，仅保留安全属性回写
                 var rest = DangerousAttrRegex.Replace(m.Groups[1].Value, "");
                 var attr = ImgSrcAttrRegex.Match(rest);
                 if (!attr.Success) return $"<img{rest}>";
@@ -104,15 +110,15 @@ namespace SeeMe
                 try
                 {
                     var full = Path.GetFullPath(Path.Combine(baseDir, src));
-                    // 璺緞閬嶅巻闃叉姢锛氳В鏋愮粨鏋滃繀椤讳粛浣嶄簬 baseDir 涔嬪唴锛屽惁鍒欒涓鸿秺鐣屾嫆缁濊鍙?
+                    // 路径遍历防护：解析结果必须仍位于 baseDir 之内，否则视为越界拒绝读取
                     var baseFull = Path.GetFullPath(baseDir).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
                     if (!full.StartsWith(baseFull, StringComparison.OrdinalIgnoreCase))
                         return $"<img{rest}>";
                     if (!File.Exists(full)) return $"<img{rest}>";
-                    // 璇诲彇澶у皬涓婇檺锛岄伩鍏嶈秴澶ф枃浠跺唴鑱斿鑷? OOM锛圖oS锛?
+                    // 读取大小上限，避免超大文件内联导致 OOM（DoS）
                     var fi = new FileInfo(full);
                     if (fi.Length > Limits.MaxInlineImageBytes) return $"<img{rest}>";
-                    // 鐩稿鍥剧墖鍐呰仈涓? data: URI锛屾棦閬垮厤 file: 鍗忚锛圕SP 宸茬鐢級锛屽張淇濊瘉绂荤嚎鍙敤
+                    // 相对图片内联为 data: URI，既避免 file: 协议（CSP 已禁用），又保证离线可用
                     var mime = MimeFromExt(Path.GetExtension(full));
                     var b64 = Convert.ToBase64String(File.ReadAllBytes(full));
                     return $"<img{attr.Groups["before"].Value}src={attr.Groups["q"].Value}data:{mime};base64,{b64}{attr.Groups["q"].Value}{attr.Groups["after"].Value}";
@@ -158,6 +164,85 @@ namespace SeeMe
 
         public string WrapTables(string html)
             => TableHtmlRegex.Replace(html, "<div style=\"overflow-x:auto;margin:.5em 0;\">$0</div>");
+
+        /// <summary>
+        /// 把代码块内的纯文本按行包裹为 <c>&lt;span class="seeme-line"&gt;</c>，为 CSS 行号提供钩子。
+        ///
+        /// <para><b>为什么在 C# 侧做而不在 JS 侧做</b>：Prism 高亮后代码内部是 <c>&lt;span class="token"&gt;</c>
+        /// 嵌套结构，JS 侧再按 <c>\n</c> 切分会横穿 token 边界，需要拆/建 DOM 节点，既慢又容易破坏高亮。
+        /// 而**此处（UpgradePreBlocks 之后、Prism 之前）代码还是 Markdig 输出的纯文本**，
+        /// 尚未被 Prism 改写，按 <c>\n</c> 切分是安全的 —— 切完包好的 <c>&lt;span class="seeme-line"&gt;</c>
+        /// 会被 Prism 当作普通容器，token 落在里面，行结构完整保留。</para>
+        ///
+        /// <para><b>行的拆分口径</b>：只包「行首」的 <c>&lt;span class="seeme-ln"&gt;</c>（行号，CSS 计数器生成
+        /// 序号、<c>user-select:none</c> 保证复制不带行号），<c>\n</c> 字符保留在行内容之后，
+        /// 这样行间空白与选中行为都不变。切勿把 <c>\n</c> 移出行外 —— 那会改变复制出的文本。</para>
+        ///
+        /// <para><b>⚠️ 必须先剥掉 Markdig 的尾随换行</b>：Markdig 的代码块正文末尾**恒有一个 <c>\n</c>**
+        /// （它属于围栏分隔符，不产生视觉行）。若不剥就直接按 <c>\n</c> 切分，会得到两个真实缺陷：
+        /// ① 每块代码末尾凭空多出一个空行容器（视觉多一行空白、行号多一个）；
+        /// ② 行数统计整体 +1，导致**恰好等于** <see cref="Limits.MaxCodeLinesWithNumbers"/> 行的代码块
+        /// 被误判超限而静默降级 —— 上限实际变成了 2999 行。两者都是本方法初版踩过的坑。</para>
+        ///
+        /// <para><b>必须跳过</b>：① 图表块（echarts 的 JSON 会被逐行包 span，<c>JSON.parse</c> 直接失败；
+        /// markmap 的容器结构也会被破坏）。注意 <c>language-echarts</c>/<c>language-markmap</c>
+        /// 挂在 <c>&lt;code&gt;</c> 上，**只查 <c>&lt;pre&gt;</c> 属性会漏判**；
+        /// ② 超 <see cref="Limits.MaxCodeLinesWithNumbers"/> 行的块（DOM 节点爆炸，见该常量注释）。</para>
+        /// </summary>
+        public string AddCodeLineNumbers(string html)
+        {
+            if (string.IsNullOrEmpty(html) || !html.Contains("code-block", StringComparison.Ordinal)) return html;
+            return CodeBlockRegex.Replace(html, m =>
+            {
+                var attrs = m.Groups["attrs"].Value;
+                var codeAttrs = m.Groups["codeAttrs"].Value;
+                var body = m.Groups["body"].Value;
+                if (body.Length == 0) return m.Value;
+                // 图表块：内容要被 JSON.parse / markmap 读取，插 span 会破坏解析。
+                // ⚠️ language-echarts / language-markmap 是挂在 <code> 上的（不在 <pre> 属性里）——
+                // 只查 attrs 会漏判，务必查 codeAttrs。
+                if (codeAttrs.Contains("language-echarts", StringComparison.OrdinalIgnoreCase)
+                    || codeAttrs.Contains("language-markmap", StringComparison.OrdinalIgnoreCase))
+                    return m.Value;
+
+                // 剥掉 Markdig 的尾随换行（见方法注释：不剥会多一个空行且行数整体 +1）
+                var contentLen = body.Length;
+                if (contentLen > 0 && body[contentLen - 1] == '\n')
+                {
+                    if (contentLen > 1 && body[contentLen - 2] == '\r') contentLen--;
+                    contentLen--;
+                }
+
+                // 行数预检：先数 \n 个数再决定切分，避免超限块白做一次遍历
+                var newlines = 0;
+                for (var i = 0; i < contentLen; i++) { if (body[i] == '\n') newlines++; }
+                var lineCount = newlines + 1;
+                if (lineCount > Limits.MaxCodeLinesWithNumbers)
+                {
+                    CodeLineSkippedCount++;
+                    return m.Value; // 静默降级：不注入行号，仍正常显示（复制不受影响）
+                }
+
+                var sb = new StringBuilder(contentLen + lineCount * 40);
+                var start = 0;
+                for (var i = 0; i < lineCount; i++)
+                {
+                    var nl = body.IndexOf('\n', start);
+                    var end = nl < 0 || nl >= contentLen ? contentLen : nl;
+                    sb.Append("<span class=\"seeme-line\">");
+                    sb.Append(body, start, end - start);
+                    sb.Append("</span>");
+                    if (end >= contentLen) break;
+                    sb.Append('\n');
+                    start = end + 1;
+                }
+                return "<pre class=\"code-block have-lines\"" + attrs + "><code" + codeAttrs + ">"
+                       + sb + "</code></pre>";
+            });
+        }
+
+        /// <summary>因超出行号上限而静默降级的代码块计数，仅用于诊断日志。</summary>
+        public int CodeLineSkippedCount { get; private set; }
 
         public string UpgradePreBlocks(string html)
             => PreWithCodeRegex.Replace(html, m =>
@@ -225,9 +310,9 @@ namespace SeeMe
         }
 
         /// <summary>
-        /// 浠庢覆鏌撳悗鐨? HTML 鎻愬彇鏍囬锛坔1-h4 鐨勭湡瀹? id 涓庢枃鏈級鐢熸垚鐩綍鍗＄墖锛圱OC锛夈??
-        /// 鐩存帴璇绘覆鏌撶粨鏋滆?岄潪浠? md 鐚? slug鈥斺?擬arkdig 瀵逛腑鏂囨爣棰樹細鍥為??鎴? section/section-N锛?
-        /// 鐚? id 蹇呯劧閿氱偣澶遍厤瀵艰嚧鐐瑰嚮鏃犲弽搴斻?傝秴 32 椤规埅鏂??
+        /// 从渲染后的 HTML 提取标题（h1-h4 的真实 id 与文本）生成目录卡片（TOC）。
+        /// 直接读渲染结果而非从 md 猜 slug——Markdig 对中文标题会回退为 section/section-N，
+        /// 猜 id 必然锚点失配导致点击无反应。超 32 项截断。
         /// </summary>
         public string BuildTocCard(string renderedHtml)
         {
@@ -249,7 +334,7 @@ namespace SeeMe
             return $"<div class=\"fm-card\"><div class=\"toc-title\">📑 目录</div>{sb}</div>";
         }
 
-        /// <summary>浠庢覆鏌撳悗 HTML 鎻愬彇鏍囬缁撴瀯锛堢骇鍒?/鐪熷疄 id/绾枃鏈級锛屼緵渚ц竟鏍忓ぇ绾蹭娇鐢ㄣ?傜┖鏍囬鎴栫┖ id 璺宠繃锛屼笂闄? 128 椤广??</summary>
+        /// <summary>从渲染后 HTML 提取标题结构（级别/真实 id/纯文本），供侧边栏大纲使用。空标题或空 id 跳过，上限 128 项。</summary>
         public List<TocItem> BuildTocItems(string renderedHtml)
         {
             var list = new List<TocItem>();
@@ -266,7 +351,7 @@ namespace SeeMe
             return list;
         }
 
-        /// <summary>鍖归厤娓叉煋鍚? HTML 鐨勬爣棰樻爣绛撅細&lt;h1-h4 id="..."&gt;鍐呭&lt;/h1-h4&gt;锛堟儼鎬ф崟鑾峰唴瀹癸級銆?</summary>
+        /// <summary>匹配渲染后 HTML 的标题标签：&lt;h1-h4 id="..."&gt;内容&lt;/h1-h4&gt;（惰性捕获内容）。</summary>
         private static readonly System.Text.RegularExpressions.Regex TocHeadingRegex = new(
             @"<h([1-4])\s+id=""([^""]*)""[^>]*>(.*?)</h\1>",
             System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
@@ -277,31 +362,31 @@ namespace SeeMe
             return s;
         }
 
-        /// <summary>澶栭儴璋冪敤锛氫緷鎹紶鍏ョ殑涓婚绠＄悊鍣ㄥ垽鏂槸鍚︽殫鑹层??</summary>
+        /// <summary>外部调用：依据传入的主题管理器判断是否暗色。</summary>
         public bool IsDarkTheme(IThemeManager theme) => theme.Current == theme.Dark;
 
-        /// <summary>鍐呴儴璋冪敤锛氫娇鐢ㄦ敞鍏ョ殑 IThemeManager 鍒ゆ柇鏄惁鏆楄壊銆?</summary>
+        /// <summary>内部调用：使用注入的 IThemeManager 判断是否暗色。</summary>
         private bool IsDark() => ThemeManager != null && ThemeManager.Current == ThemeManager.Dark;
 
-        /// <summary>Markdown 娓叉煋椋庢牸锛歞efault / github / simple锛堣缃彉鏇存椂鐢? MainWindow 鍐欏叆锛夈??</summary>
+        /// <summary>Markdown 渲染风格：default / github / simple（设置变更时由 MainWindow 写入）。</summary>
         public string MdStyle { get; set; } = "default";
 
-        /// <summary>鎶ょ溂妯″紡锛堟殩鑹叉护闀滐紝璁剧疆鍙樻洿鏃剁敱 MainWindow 鍐欏叆锛夈??</summary>
+        /// <summary>护眼模式（暖色滤镜，设置变更时由 MainWindow 写入）。</summary>
         public bool EyeCare { get; set; }
 
-        /// <summary>姝ｆ枃鍩虹瀛楀彿 px锛堥粯璁? 14锛岀缉鏀惧?嶆暟浠ユ涓哄熀纭?锛夈??</summary>
+        /// <summary>正文基础字号 px（默认 14，缩放倍数以此为基础）。</summary>
         public double FontSize { get; set; } = 14;
 
-        /// <summary>姝ｆ枃琛岄珮鍊嶆暟锛堥粯璁? 1.65锛夈??</summary>
+        /// <summary>正文行高倍数（默认 1.65）。</summary>
         public double LineHeight { get; set; } = 1.65;
 
-        /// <summary>鐢? MainWindow 鍦ㄨ閰嶆湇鍔℃椂娉ㄥ叆锛屼緵鍐呴儴娓叉煋閫昏緫鍒ゆ柇褰撳墠涓婚銆?</summary>
+        /// <summary>由 MainWindow 在装配服务时注入，供内部渲染逻辑判断当前主题。</summary>
         public IThemeManager? ThemeManager { get; set; }
 
-        /// <summary>鐢? MainWindow 鍦ㄨ閰嶆湇鍔℃椂娉ㄥ叆锛屼緵鍐呴儴娓叉煋閫昏緫鏍煎紡鍖栨枃浠跺ぇ灏忋??</summary>
+        /// <summary>由 MainWindow 在装配服务时注入，供内部渲染逻辑格式化文件大小。</summary>
         public IFileConverter? Converter { get; set; }
 
-        /// <summary>鐢? MainWindow 娉ㄥ叆锛氶珮浜? storage锛屾牴鎹? state.CurrentFile 鏌ヨ鍑哄綋鍓嶆枃浠剁殑鏍囨敞鍦ㄦ父鏌撴椂娉ㄥ叆椤甸潰銆?</summary>
+        /// <summary>由 MainWindow 注入：高亮 storage，根据 state.CurrentFile 查出当前文件的标注在渲染时注入页面。</summary>
         public IHighlightStore? HighlightStore { get; set; }
 
         public string Render(string bodyHtml, PanelState state, string frontMatterCard,
@@ -312,10 +397,10 @@ namespace SeeMe
             bodyHtml = RenderFencedBlocks(bodyHtml);
             var hasCharts = bodyHtml.Contains("class=\"seeme-chart\"", StringComparison.Ordinal);
             var hasMarkmaps = bodyHtml.Contains("class=\"seeme-markmap\"", StringComparison.Ordinal);
-            // 涓婚鍙屽鍥哄畾鍊硷細:root 鎭掍负浜壊銆乭tml.dark 鎭掍负鏆楄壊锛堣 ThemeVars 鍞竴璋冭壊鏉匡級銆?
-            // 涔嬪墠 :root 浠庛?屽綋鍓嶄富棰樸?嶇殑 WPF 璧勬簮璇诲彇锛屾殫鑹叉ā寮忎笅鐢熸垚鐨勯〉闈? :root 宸叉槸鏆楄壊鍊硷紝
-            // 鍒囧洖浜壊锛堢Щ闄? dark class锛夊悗椤甸潰浠嶅彇 :root 鐨勬殫鑹插?? 鈫? 椤甸潰涓庣獥鍙ｄ富棰樹笉涓?鑷淬??
-            // 鍙屽鍥哄畾鍊煎悗锛屼换鎰忎富棰樹笅鐢熸垚鐨勯〉闈㈤兘鑳介?氳繃 class 鍙屽悜姝ｇ‘鍒囨崲銆?
+            // 主题双套固定值：:root 恒为亮色、html.dark 恒为暗色（见 ThemeVars 唯一调色板）。
+            // 之前 :root 从「当前主题」的 WPF 资源读取，暗色模式下生成的页面 :root 已是暗色值，
+            // 切回亮色（移除 dark class）后页面仍取 :root 的暗色值 → 页面与窗口主题不一致。
+            // 双套固定值后，任意主题下生成的页面都能通过 class 双向正确切换。
             var css = $@"
 {ThemeCss()}
 {customCss ?? ""}
@@ -330,7 +415,7 @@ ul,ol {{ padding-left:1.4em; margin:.4em 0; }}
 li {{ margin:.15em 0; }}
 blockquote {{ padding:.4em .8em; margin:.5em 0; }}
 code {{ font-family:'Consolas','JetBrains Mono',Menlo,monospace; background:var(--code-bg); padding:1px 4px; border-radius:3px; font-size:.88em; }}
-pre {{ background:var(--pre-bg); color:var(--pre-text); padding:10px 14px; border-radius:8px; overflow-x:auto; line-height:1.45; font-size:12px; margin:.5em 0; }}
+pre {{ background:var(--pre-bg); color:var(--pre-text); padding:10px 14px; border-radius:8px; overflow-x:auto; line-height:1.45; font-size:12px; margin:.5em 0; position:relative; }}
 pre code {{ background:transparent; color:inherit; padding:0; font-size:inherit; }}
 pre .token {{ background:transparent !important; }}
 table {{ border-collapse:collapse; width:100%; margin:.5em 0; font-size:12px; }}
@@ -366,6 +451,40 @@ section.footnotes li p {{ display:inline; }}
 .seeme-markmap text {{ font-family:'Microsoft YaHei','PingFang SC',sans-serif; }}
 html.dark .seeme-markmap text {{ fill:var(--text); }}
 html.dark .seeme-markmap path {{ stroke:var(--secondary); }}
+/* ── 代码块行号 + 行级复制（AddCodeLineNumbers 注入 .seeme-line）──
+   counter 由 .seeme-line 自增并在 ::before 显示序号；::before 是生成内容，
+   **既不进选中范围也不进 textContent**，所以整块复制天然不含行号，无需 JS 清洗。 */
+pre.have-lines {{ counter-reset:seeme-ln; padding-left:0; }}
+pre.have-lines .seeme-line {{ display:block; padding-left:56px; position:relative; min-height:1.45em; }}
+pre.have-lines .seeme-line::before {{
+  counter-increment:seeme-ln; content:counter(seeme-ln);
+  position:absolute; left:0; width:44px; padding-right:10px; text-align:right;
+  color:var(--quote-text); opacity:.55; user-select:none; -webkit-user-select:none; pointer-events:none;
+}}
+pre.have-lines .seeme-line:hover {{ background:rgba(127,127,127,.10); }}
+/* 行级复制按钮：hover 该行时出现在行右侧（整块复制按钮见页脚工具栏） */
+.seeme-lncpy {{
+  position:absolute; right:2px; top:50%; transform:translateY(-50%);
+  border:none; border-radius:4px; background:transparent; color:var(--quote-text);
+  font-size:11px; line-height:1; padding:3px 5px; cursor:pointer; opacity:0;
+  user-select:none; -webkit-user-select:none; transition:opacity .12s ease;
+}}
+pre.have-lines .seeme-line:hover .seeme-lncpy {{ opacity:.75; }}
+.seeme-lncpy:hover {{ opacity:1; background:rgba(127,127,127,.20); }}
+/* 代码块工具栏（整块复制 / 行号开关）：默认半透明，悬停代码块时显形 */
+.seeme-codebar {{
+  position:absolute; right:6px; top:6px; display:flex; gap:4px; opacity:0;
+  transition:opacity .15s ease; z-index:2;
+}}
+pre.have-lines:hover .seeme-codebar, pre.have-lines:focus-within .seeme-codebar {{ opacity:1; }}
+.seeme-codebar button {{
+  border:1px solid var(--table-bdr); background:var(--bg); color:var(--quote-text);
+  font-size:11px; line-height:1; padding:3px 7px; border-radius:4px; cursor:pointer;
+  user-select:none; -webkit-user-select:none;
+}}
+.seeme-codebar button:hover {{ color:var(--text); border-color:var(--secondary); }}
+pre.have-lines.seeme-nolines .seeme-line {{ padding-left:16px; }}
+pre.have-lines.seeme-nolines .seeme-line::before {{ display:none; }}
     ";
 
             // Markdown 渲染风格注入口（simple / github 覆盖基础样式）
@@ -418,14 +537,61 @@ body.seeme-ann-active ::selection {{ background:#FDE68A; }}
             var scrollScript = $@"
 (function(){{
   var __restoreY = {state.LastScrollY.ToString(System.Globalization.CultureInfo.InvariantCulture)};
-  function report(){{ try {{ window.chrome.webview.postMessage(JSON.stringify({{kind:'scroll',y:window.scrollY}})); }} catch(e){{}} }}
+  // 当前可见的最上方标题 id：大纲高亮跟随用（IntersectionObserver 维护，见下方 observeHeadings）
+  var __curHeading = '';
+  // 阅读百分比：内容不足一屏时恒为 100（视为已读完），避免除零得到 NaN
+  function __pct(){{
+    try {{
+      var d = document.documentElement;
+      var max = d.scrollHeight - window.innerHeight;
+      if(max <= 0) return 100;
+      var p = Math.round(100 * window.scrollY / max);
+      return p < 0 ? 0 : (p > 100 ? 100 : p);
+    }} catch(e) {{ return 0; }}
+  }}
+  // __hover = 鼠标当前是否位于本栏页面内。双栏下宿主据此判断「这一侧才是我正在操作的」。
+  // 判定源用 mouseenter/wheel（不监听 mousemove：高频回调无必要）。
+  var __hover = false;
+  function report(){{ try {{ window.chrome.webview.postMessage(JSON.stringify({{kind:'scroll',y:window.scrollY,p:__pct(),h:__curHeading,m:__hover}})); }} catch(e){{}} }}
+  // 进入本栏即上报一次：让活动栏（标题栏高亮、Ctrl+S 保存目标等）立刻跟随鼠标，
+  // 无需先点一下或先滚一下。wheel 兜底覆盖「鼠标已在页内但 mouseenter 已错过」的情形。
+  window.addEventListener('mouseenter', function(){{ if(!__hover){{ __hover = true; report(); }} }});
+  window.addEventListener('wheel', function(){{ if(!__hover){{ __hover = true; report(); }} }}, {{ passive: true }});
+  window.addEventListener('mouseleave', function(){{ __hover = false; }});
+  // 页面失焦（切到另一栏 / 窗口失活）时清掉，避免两侧都自认持有鼠标
+  window.addEventListener('blur', function(){{ __hover = false; }});
   function applyZoom(z){{ document.documentElement.style.fontSize=(z*{FontSize.ToString(System.Globalization.CultureInfo.InvariantCulture)})+'px'; }}
+  // 标题可见性跟踪：threshold 用离散值数组（连续值会触发过多回调）。
+  // 记录「视口内最靠上的标题」，据此高亮大纲对应项。
+  function observeHeadings(){{
+    try {{
+      var hs = document.querySelectorAll('h1[id],h2[id],h3[id],h4[id],h5[id],h6[id]');
+      if(!hs.length || !window.IntersectionObserver) return;
+      var visible = {{}};
+      var io = new IntersectionObserver(function(entries){{
+        entries.forEach(function(en){{
+          if(en.isIntersecting) visible[en.target.id] = true; else delete visible[en.target.id];
+        }});
+        var best = '', bestTop = Infinity;
+        for(var id in visible){{
+          var el = document.getElementById(id);
+          if(!el) continue;
+          var t = el.getBoundingClientRect().top;
+          if(t < bestTop) {{ bestTop = t; best = id; }}
+        }}
+        // 没有任何标题在视口内（如滚动到图区）时保留上一次的 id，避免大纲高亮闪断
+        if(best) __curHeading = best;
+      }}, {{ rootMargin:'0px', threshold:[0, 0.1, 0.5, 1] }});
+      hs.forEach(function(h){{ io.observe(h); }});
+    }} catch(e) {{}}
+  }}
   function tryRestore(){{
     if(__restoreY > 0) {{ window.scrollTo(0, __restoreY); }}
     applyZoom({state.FontScale.ToString(System.Globalization.CultureInfo.InvariantCulture)});
     try {{ if(window.Prism) Prism.highlightAll(); }} catch(e){{}}
     try {{ if(window.renderMathInElement) renderMathInElement(document.body,{{delimiters:[{{left:'$$',right:'$$',display:true}},{{left:'$',right:'$',display:false}}],throwOnError:false}}); }} catch(e){{}}
     try {{ if(window.mermaid) mermaid.initialize({{startOnLoad:true,theme:{(IsDark() ? "'dark'" : "'default'")}}}); }} catch(e){{}}
+    observeHeadings();
     report();
     window.removeEventListener('load', tryRestore);
   }}
@@ -439,15 +605,15 @@ body.seeme-ann-active ::selection {{ background:#FDE68A; }}
     if(!a) return;
     var h = a.getAttribute('href');
     if(!h) return;
-    // 鍚岄〉閿氱偣锛?#...锛変繚鐣欐祻瑙堝櫒鍘熺敓璺宠浆锛岄伩鍏嶇牬鍧忔枃鍐呯洰褰曞鑸?
+    // 同页锚点（#...）保留浏览器原生跳转，避免破坏文内目录导航
     if(h.charAt(0) === '#') return;
-    // 闃绘榛樿琛屼负锛氬惁鍒? WebView2 鍦? script-src 'unsafe-inline' 涓嬩細鎵ц javascript:/vbscript: 浼崗璁紙XSS锛夈??
-    // 鎵?鏈夌椤佃烦杞粺涓?浜ょ粰瀹夸富鍦? OnWebMessage 涓寜 scheme 鐧藉悕鍗曞鐞嗐??
+    // 阻止默认行为：否则 WebView2 在 script-src 'unsafe-inline' 下会执行 javascript:/vbscript: 伪协议（XSS）。
+    // 所有跨页跳转统一交给宿主在 OnWebMessage 中按 scheme 白名单处理。
     e.preventDefault();
     try {{ window.chrome.webview.postMessage(JSON.stringify({{kind:'link',href:h}})); }} catch(err){{}}
   }});
   window.__seemeApplyZoom = applyZoom;
-  // 鍙屽嚮鍥剧墖 鈫? 鍏ㄥ睆 lightbox 鏀惧ぇ锛堝啀娆＄偣鍑? / Esc 鍏抽棴锛夈?俰d 涓庢姢鐪? filter 鐨? :not() 閰嶅悎锛岄伩鍏嶈嚜韬婊ら暅褰卞搷銆?
+  // 双击图片 → 全屏 lightbox 放大（再次点击 / Esc 关闭）。id 与护眼 filter 的 :not() 配合，避免自身被滤镜影响。
   var __ov=null;
   function __ovClose(){{ if(__ov){{ document.body.removeChild(__ov); __ov=null; }} }}
   document.addEventListener('dblclick', function(e){{
@@ -489,6 +655,11 @@ body.seeme-ann-active ::selection {{ background:#FDE68A; }}
             var echartsJsUrl = hasCharts ? $"<script src='https://{VirtualHost}/echarts/echarts.min.js'></script>\n" : "";
             var chartInit = hasCharts ? $"<script nonce='{nonce}'>{ChartInitScript}</script>\n" : "";
             var markmapInit = hasMarkmaps ? $"<script type='module' nonce='{nonce}'>{MarkmapInitScript}</script>\n" : "";
+            // 图表导出脚本只在页面含图表时注入；Mermaid（```mermaid 经 Markdig 出 <div class="mermaid">）
+            // 也算可导出图表 —— 它渲染后同样是 SVG DOM，走同一条序列化路径。
+            var hasMermaid = bodyHtml.Contains("class=\"mermaid\"", StringComparison.Ordinal);
+            var chartExportTag = (hasCharts || hasMarkmaps || hasMermaid)
+                ? $"<script nonce='{nonce}'>{ChartExportScript}</script>\n" : "";
 
             // 高亮标注：按当前文件路径取存储的标注，随页面加载按文本重新包裹
             var annData = (HighlightStore?.ForFile(state.CurrentFile ?? "") ?? Array.Empty<HighlightItem>())
@@ -523,7 +694,8 @@ body.seeme-ann-active ::selection {{ background:#FDE68A; }}
 <script src='{mermaidJsUrl}'></script>
 {echartsJsUrl}{chartInit}{markmapInit}
 <script nonce='{nonce}'>{scrollScript}</script>
-<script nonce='{nonce}'>{SearchScript}</script>
+<script nonce='{nonce}'>{CodeBlockScript}</script>
+{chartExportTag}<script nonce='{nonce}'>{SearchScript}</script>
 <script nonce='{nonce}'>{annotationScript}</script>
 <script nonce='{nonce}'>{KeyBridgeScript}</script>
 </body></html>";
@@ -531,11 +703,11 @@ body.seeme-ann-active ::selection {{ background:#FDE68A; }}
 
     }
 
-    /// <summary>鏂囨。澶х翰鏉＄洰锛歁arkdig 娓叉煋鍚庢爣棰樼殑鐪熷疄 id锛堥敋鐐硅烦杞洰鏍囷級涓庣函鏂囨湰鏍囬銆?</summary>
+    /// <summary>文档大纲条目：Markdig 渲染后标题的真实 id（锚点跳转目标）与纯文本标题。</summary>
     public sealed class TocItem
     {
         public int Level;          // h1=1 ... h4=4
-        public string Id = "";     // 娓叉煋 HTML 涓殑 id 灞炴?э紙宸插幓 HTML 鏍囩锛?
-        public string Title = "";  // 绾枃鏈爣棰?
+        public string Id = "";     // 渲染 HTML 中的 id 属性（已去 HTML 标签）
+        public string Title = "";  // 纯文本标题
     }
 }

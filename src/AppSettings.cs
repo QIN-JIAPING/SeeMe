@@ -16,9 +16,7 @@ namespace SeeMe
     /// </summary>
     public static class AppSettings
     {
-        private static string DefaultStoragePath => Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "SeeMe", "settings.json");
+        private static string DefaultStoragePath => StoragePaths.Combine("settings.json");
 
         private static string? _storagePathOverride;
 
@@ -78,7 +76,8 @@ namespace SeeMe
             }
             catch (Exception ex)
             {
-                SeeMeLog.Info("AppSettings.LoadAll", ex.Message);
+                // 配置读不出 → 全部走默认值，用户会感觉"设置没保存"。需留档。
+                SeeMeLog.Error("AppSettings.LoadAll", ex);
             }
             return map;
         }
@@ -136,7 +135,8 @@ namespace SeeMe
             }
             catch (Exception ex)
             {
-                SeeMeLog.Info("AppSettings.Set", ex.Message);
+                // 写入失败 → 用户刚改的设置没落盘，重启即丢失。必须留档。
+                SeeMeLog.Error("AppSettings.Set", ex);
             }
         }
 

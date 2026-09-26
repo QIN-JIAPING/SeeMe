@@ -408,7 +408,8 @@ namespace SeeMe
             try
             {
                 if (BacklinkList.SelectedItem is string path && File.Exists(path))
-                    OpenFileInternal(ActiveOrLeft, path);
+                    // ActiveOrLeft 可能为 null（无活动面板），显式回退左栏保持行为不变。
+                    OpenFileInternal(ActiveOrLeft ?? _app.Left, path);
             }
             catch (Exception ex) { LogErr("OnBacklinkClick: " + ex.Message); }
         }

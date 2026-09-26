@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2026 QIN-JIAPING
+// Copyright (c) 2026 QIN-JIAPING
 // SPDX-License-Identifier: MIT
 
 using System;
@@ -150,7 +150,7 @@ html,body {{ margin:0; height:100%; background:var(--bg); }}
         {
             var isDark = IsDark();
 
-            // 鍙屽鍥哄畾鍊硷細:root 鎭掍寒鑹层?乭tml.dark 鎭掓殫鑹诧紙ThemeVars 鍞竴璋冭壊鏉匡級锛屼繚璇佷换鎰忎富棰樹笅鐢熸垚椤甸潰鍧囧彲鍙屽悜鍒囨崲
+    // 双套固定值：:root 恒亮色、html.dark 恒暗色（ThemeVars 唯一调色板），保证任意主题下
             var css = $@"
 {ThemeCss()}
 {PageResetCss}
@@ -253,13 +253,13 @@ mark.seeme-hl, mark.seeme-ann {{ -webkit-print-color-adjust:exact; print-color-a
         }
 
         /// <summary>
-        /// 绌虹櫧椤垫樉绀哄彲鍏抽棴鐨勬杩庢彁绀哄皬鍗＄墖锛堝彸涓嬭娴姩锛夛紝鏀寔"涓嶅啀鏄剧ず"锛堟寔涔呭寲鍒? settings.json锛夈??
+        /// 空白页显示可关闭的欢迎提示小卡片（右下角浮动），支持"不再显示"（持久化到 settings.json）。
         /// </summary>
         public string BuildWelcomePage(FrameworkElement resourceElement)
         {
             var isDark = IsDark();
 
-            // 鍙屽鍥哄畾鍊硷細:root 鎭掍寒鑹层?乭tml.dark 鎭掓殫鑹诧紙ThemeVars 鍞竴璋冭壊鏉匡級锛屼繚璇佷换鎰忎富棰樹笅鐢熸垚椤甸潰鍧囧彲鍙屽悜鍒囨崲
+    // 双套固定值：:root 恒亮色、html.dark 恒暗色（ThemeVars 唯一调色板），保证任意主题下
             var htmlClass = isDark ? " class='dark'" : "";
             var nonce = NewNonce();
 
@@ -330,7 +330,7 @@ h2 {{ font-size:14px; font-weight:600; color:var(--heading); flex:1; }}
           <path d='M23 31 V15 M16 22 L23 15 L30 22'/>
         </svg>
       </div>
-      <div class='empty-title'>鏈?夋嫨</div>
+      <div class='empty-title'>未选择</div>
       <div class='empty-hint'>拖拽文件到此 · Ctrl+O 打开</div>
     </div>
   </div>
@@ -342,7 +342,7 @@ h2 {{ font-size:14px; font-weight:600; color:var(--heading); flex:1; }}
     <div class='tip-body'>
       <div><kbd>Ctrl+O</kbd>打开文件</div>
       <div><kbd>Ctrl+F</kbd>查找</div>
-      <div><kbd>Ctrl+0/+/鈭?</kbd>缂╂斁</div>
+      <div><kbd>Ctrl+0/+/−</kbd>缩放</div>
     </div>
     <div class='tip-foot'>
       <button id='tipNever'>不再显示</button>

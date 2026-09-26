@@ -255,9 +255,7 @@ namespace SeeMe
 
         // ──────────────── 持久化 ────────────────
 
-        private string StoragePath => Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "SeeMe", SettingsFileName);
+        private string StoragePath => StoragePaths.Combine(SettingsFileName);
 
         private string? LoadSavedTheme()
         {
@@ -271,7 +269,11 @@ namespace SeeMe
                     return el.GetString();
                 }
             }
-            catch (Exception ex) { SeeMeLog.Info("ThemeManager.LoadSavedTheme", ex.Message); }
+            catch (Exception ex)
+            {
+                // 主题读不出 → 回退默认亮色，用户会感觉"我的深色主题没了"。留档。
+                SeeMeLog.Error("ThemeManager.LoadSavedTheme", ex);
+            }
             return null;
         }
 
@@ -315,7 +317,11 @@ namespace SeeMe
 
                 File.WriteAllText(StoragePath, obj.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
             }
-            catch (Exception ex) { SeeMeLog.Info("ThemeManager.SaveSettings", ex.Message); }
+            catch (Exception ex)
+            {
+                // 主题偏好没落盘 → 重启后回退默认。留档。
+                SeeMeLog.Error("ThemeManager.SaveSettings", ex);
+            }
         }
 
         /// <summary>读 settings.json 根对象；文件缺失/损坏返回 null。</summary>

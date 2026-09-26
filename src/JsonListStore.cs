@@ -55,7 +55,11 @@ namespace SeeMe
                         _items.Add(it);
                 }
             }
-            catch (Exception ex) { SeeMeLog.Info(LogTag + ".Load", ex.Message); }
+            catch (Exception ex)
+            {
+                // 读取失败 → 静默成空列表，用户会看到"历史/书签全没了"。必须留档。
+                SeeMeLog.Error(LogTag + ".Load", ex);
+            }
         }
 
         /// <summary>写盘（自动建目录）；失败静默记日志，不抛异常。</summary>
@@ -69,7 +73,11 @@ namespace SeeMe
                 File.WriteAllText(_storagePath,
                     JsonSerializer.Serialize(_items, new JsonSerializerOptions { WriteIndented = true }));
             }
-            catch (Exception ex) { SeeMeLog.Info(LogTag + ".Save", ex.Message); }
+            catch (Exception ex)
+            {
+                // 写入失败 → 用户的历史/书签/高亮/笔记没落盘，是数据丢失级问题。必须留档。
+                SeeMeLog.Error(LogTag + ".Save", ex);
+            }
         }
     }
 }

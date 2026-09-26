@@ -28,6 +28,17 @@ namespace SeeMe
         public FileSystemWatcher? Watcher;
         public DispatcherTimer? Debounce;
         public double LastScrollY;
+        /// <summary>
+        /// 最近一次上报的阅读百分比 0–100（前端按 scrollHeight 计算）。
+        /// 与 <see cref="LastScrollY"/> 的区别：Y 是还原用的像素值，本字段是给人看的进度。
+        /// 内容不足一屏时前端上报 100。
+        /// </summary>
+        public double LastReadPercent;
+        /// <summary>
+        /// 当前可见的最上方标题 id（前端 IntersectionObserver 上报）。
+        /// 用途：大纲面板/浮动大纲的高亮跟随。
+        /// </summary>
+        public string CurrentHeadingId = "";
         public double FontScale = 1.0;
         // 自适应防抖：当前等待间隔(ms)，连发时递增至上限，刷新成功后回落到最小值
         public int DebounceMs = 100;

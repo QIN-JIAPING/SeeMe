@@ -14,9 +14,7 @@ namespace SeeMe
     /// </summary>
     public class BookmarkStore : JsonListStore<string>, IBookmarkStore
     {
-        private static string DefaultStoragePath =>
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "SeeMe", "bookmarks.json");
+        private static string DefaultStoragePath => StoragePaths.Combine("bookmarks.json");
 
         public event Action? Changed;
 

@@ -19,8 +19,7 @@ namespace SeeMe
         /// <summary>历史上限（可在设置中调整），改小会自动裁剪。</summary>
         public int MaxEntries { get; private set; } = DefaultMaxEntries;
 
-        private static string DefaultStoragePath =>
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SeeMe", "history.json");
+        private static string DefaultStoragePath => StoragePaths.Combine("history.json");
 
         public IReadOnlyList<string> Entries => _items.AsReadOnly();
 

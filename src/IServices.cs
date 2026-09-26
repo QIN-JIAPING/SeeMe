@@ -51,6 +51,8 @@ namespace SeeMe
         string SanitizeLinkHrefs(string html);
         string WrapTables(string html);
         string UpgradePreBlocks(string html);
+        /// <summary>代码块逐行包裹 .seeme-line，为 CSS 行号与行级复制提供钩子（超限块静默降级）。</summary>
+        string AddCodeLineNumbers(string html);
         string? StripYamlFrontMatter(string md, out string? frontMatterBlock);
         string BuildFrontMatterCard(string? block);
         string BuildTocCard(string md);

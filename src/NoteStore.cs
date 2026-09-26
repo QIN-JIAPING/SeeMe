@@ -25,9 +25,7 @@ namespace SeeMe
     /// </summary>
     public class NoteStore : JsonListStore<NoteItem>, INoteStore
     {
-        private static string DefaultStoragePath =>
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "SeeMe", "notes.json");
+        private static string DefaultStoragePath => StoragePaths.Combine("notes.json");
 
         public IReadOnlyList<NoteItem> Items => _items;
 

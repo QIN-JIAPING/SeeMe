@@ -3,25 +3,19 @@
 
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Security;
 using System.Text;
-using System.Text.RegularExpressions;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Effects;
 using System.Windows.Threading;
-using Microsoft.Win32;
-using Markdig;
-using Microsoft.Web.WebView2.Wpf;
 using Microsoft.Web.WebView2.Core;
+using Microsoft.Win32;
 
 namespace SeeMe
 {
@@ -37,6 +31,7 @@ namespace SeeMe
         private IBookmarkStore _bookmarks = null!;
         private IHighlightStore _highlights = null!;
         private INoteStore _notes = null!;
+        private ReadProgressStore _progress = null!;
         /// <summary>独立命令面板窗口（不挂在主窗内，避免遮住阅读区）。</summary>
         private CommandPaletteWindow? _paletteWindow;
         private string _searchFilter = "";
@@ -50,8 +45,6 @@ namespace SeeMe
         private const int DebounceMinMs = 100;
         private const int DebounceMaxMs = 800;
         private const int DebounceStepMs = 100;
-        // 双栏滚动同步防重入标志
-        private bool _isSyncingScroll;
 
         public MainWindow()
         {
@@ -117,6 +110,7 @@ namespace SeeMe
             try
             {
                 SaveWindowState();
+                SaveAllReadProgress();   // 必须在 CleanupPanel 之前：Dispose 后滚动数据失效
                 CleanupPanel(_app.Left);
                 CleanupPanel(_app.Right);
                 // 释放隐藏提取 WebView：ExtractView 独立于 PanelState，此前从未 Dispose，
@@ -127,9 +121,7 @@ namespace SeeMe
             base.OnClosed(e);
         }
 
-        private static string WindowStatePath => Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "SeeMe", "window.json");
+        private static string WindowStatePath => StoragePaths.Combine("window.json");
 
         private record WindowStateData(double Width, double Height, double Left, double Top, bool Maximized);
 
@@ -169,12 +161,21 @@ namespace SeeMe
             catch (Exception ex) { LogErr("CleanupPanel: " + ex.Message); }
         }
 
+        /// <summary>
+        /// 退出前把两个面板的阅读进度落盘。
+        /// 必须在 <see cref="CleanupPanel"/> **之前**调用 —— 后者会 Dispose 掉 WebView，
+        /// 之后 state 上的滚动数据就没意义了。
+        /// </summary>
+        private void SaveAllReadProgress()
+        {
+            try { if (_app?.Left != null) SaveReadProgress(_app.Left); } catch (Exception ex) { LogErr("SaveAllReadProgress(L): " + ex.Message); }
+            try { if (_app?.Right != null) SaveReadProgress(_app.Right); } catch (Exception ex) { LogErr("SaveAllReadProgress(R): " + ex.Message); }
+        }
+
         // ──────────────── WebView2 缓存定期清理（保留设置/历史/书签） ────────────────
 
         /// <summary>上次清理标记文件；距今超过清理间隔（默认 7 天）才再次清理。</summary>
-        private static string WebViewCacheCleanupMarker => Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "SeeMe", "webview2-cache-cleaned.txt");
+        private static string WebViewCacheCleanupMarker => StoragePaths.Combine("webview2-cache-cleaned.txt");
         private static readonly TimeSpan WebViewCacheCleanupInterval = TimeSpan.FromDays(7);
 
         private static bool IsWebViewCacheCleanupDue()
@@ -306,109 +307,6 @@ namespace SeeMe
             _theme.ApplyToWindow(this, resolved);
             _ = PushThemeAsync(targetDark);
         }
-
-        /// <summary>应用历史上限，立即裁剪并持久化。</summary>
-        public void ApplyHistorySize(int n)
-        {
-            AppSettings.Set(AppSettings.HistorySizeKey, n);
-            if (_app?.History != null) _app.History.SetMaxEntries(n);
-        }
-
-        /// <summary>将默认缩放应用到当前两个面板并持久化。</summary>
-        public void ApplyDefaultZoomNow()
-        {
-            var z = AppSettings.Get(AppSettings.DefaultZoomKey, 1.0);
-            if (_app?.Left != null) _app.Left.FontScale = z;
-            if (_app?.Right != null) _app.Right.FontScale = z;
-            ApplyPanelZoom(_app?.Left);
-            ApplyPanelZoom(_app?.Right);
-        }
-
-        /// <summary>按设置应用信息面板默认展开/收起。</summary>
-        public void ApplyInfoPanelDefault()
-        {
-            if (_app == null) return;
-            SetInfoPanelVisibility(AppSettings.Get(AppSettings.InfoPanelVisibleKey, true));
-        }
-
-        /// <summary>设置自定义 CSS 路径（空=清除），持久化并重渲染。</summary>
-        public void ApplyCustomCssNow(string path)
-        {
-            AppSettings.Set(AppSettings.CustomCssKey, path ?? "");
-            _customCssPath = string.IsNullOrEmpty(path) ? null : path;
-            ReloadOpenPanels();
-        }
-
-        /// <summary>主题色切换（indigo/blue/green），持久化 + WPF 资源动画 + 预览页重渲染。</summary>
-        public void ApplyAccentNow(string accent)
-        {
-            AppSettings.Set(AppSettings.AccentKey, accent);
-            _theme.ApplyAccent(accent);
-            ReloadOpenPanels(); // CSS 变量跟随 ActiveAccent，重渲染让预览同步换色
-        }
-
-        /// <summary>Markdown 渲染风格（default/github/simple），持久化并重渲染。</summary>
-        public void ApplyMdStyleNow(string style)
-        {
-            AppSettings.Set(AppSettings.MdStyleKey, style);
-            if (_render is RenderService rs) rs.MdStyle = style;
-            ReloadOpenPanels();
-            if (StatusText != null)
-                StatusText.Text = "已应用 Markdown 渲染风格：" + style;
-        }
-
-        /// <summary>护眼模式开关，持久化并重渲染（暖色滤镜作用于所有 HTML 预览页）。</summary>
-        public void ApplyEyeCareNow(bool on)
-        {
-            AppSettings.Set(AppSettings.EyeCareKey, on);
-            if (_render is RenderService rs) rs.EyeCare = on;
-            ReloadOpenPanels();
-            if (StatusText != null)
-                StatusText.Text = on ? "已开启护眼模式" : "已关闭护眼模式";
-        }
-
-        /// <summary>动画效果开关（主题切换过渡动画）。</summary>
-        public void ApplyAnimationsNow(bool on)
-        {
-            AppSettings.Set(AppSettings.AnimationsKey, on);
-            _theme.AnimationsEnabled = on;
-        }
-
-        /// <summary>
-        /// 自动保存开关/间隔变更时对正在编辑的面板即时生效：向编辑页注入 __setAutoSave，
-        /// 不重建页面、不丢失正在编辑的内容（未打开编辑页则下次进入编辑时生效）。
-        /// </summary>
-        public void ApplyAutoSaveSettingsNow()
-        {
-            if (_app == null) return;
-            var on = AppSettings.Get(AppSettings.AutoSaveKey, true) ? "true" : "false";
-            var delayMs = AppSettings.Get(AppSettings.AutoSaveDelayKey, 10) * 1000;
-            foreach (var st in new[] { _app.Left, _app.Right })
-            {
-                if (st?.EditMode != true || st.WebView?.CoreWebView2 == null) continue;
-                try
-                {
-                    st.WebView.CoreWebView2.ExecuteScriptAsync(
-                        $"window.__setAutoSave ? window.__setAutoSave({on}, {delayMs}) : ''");
-                }
-                catch (Exception ex) { LogErr("ApplyAutoSaveSettingsNow: " + ex.Message); }
-            }
-        }
-
-        /// <summary>PDF 查看器顶栏状态徽标：显示文本层已提取 / 扫描版无文本层（提取完成且面板为 PDF 时）。</summary>
-        /// <summary>字号/行高变更：持久化并重渲染（缩放倍数以新字号为基础）。</summary>
-        public void ApplyFontSettingsNow()
-        {
-            if (_render is RenderService rs)
-            {
-                rs.FontSize = AppSettings.Get(AppSettings.FontSizeKey, 14);
-                rs.LineHeight = AppSettings.Get(AppSettings.LineHeightKey, 1.65);
-            }
-            ReloadOpenPanels();
-        }
-
-        /// <summary>当前动画开关（设置对话框读回用）。</summary>
-        public bool ThemeAnimationsEnabled => _theme.AnimationsEnabled;
 
         /// <summary>当前活动面板的文件名（导出对话框默认文件名）。</summary>
         public string? CurrentFileName
@@ -595,6 +493,11 @@ namespace SeeMe
             _notes = NoteStore.Load();
             _notes.Changed += RefreshNotesPanel;
 
+            // 阅读进度：跨会话持久化滚动位置与百分比（内存态的 PanelState.LastScrollY 只活一次运行）
+            _progress = ReadProgressStore.Load();
+            _progress.PruneMissing();   // 启动清一次僵尸条目（用户删掉的文档不该留在进度表里）
+            _progress.Changed += RefreshRecentFilesList;
+
             // 先设置 WebView 默认背景避免闪白（跟随主题画布色）
             var initBg = ThemeWebViewBg(_theme.Current == _theme.Dark);
             WebViewL.DefaultBackgroundColor = initBg;
@@ -602,12 +505,13 @@ namespace SeeMe
 
             try
             {
-                // 显式指定 UserDataFolder（%LOCALAPPDATA%\SeeMe\WebView2Data）：
+                // 显式指定 UserDataFolder（StoragePaths.Root\WebView2Data）：
                 // 1) 安装到 Program Files 等只读目录时不再依赖 exe 旁的默认数据目录（SeeMe.exe.WebView2，不可写）；
-                // 2) 缓存位置确定，便于定期清理；设置/历史/书签（%LOCALAPPDATA%\SeeMe\*.json）不受影响。
-                var webviewDataDir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "SeeMe", "WebView2Data");
+                // 2) 缓存位置确定，便于定期清理；设置/历史/书签等同根下的 *.json 不受影响；
+                // 3) 便携模式下随之落到 data\WebView2Data，整个数据树随程序目录一起搬迁。
+                // ⚠️ 便携模式装在 Program Files 时 WebView2 会因写不进去而初始化失败 ——
+                // 该场景由设置页的可写性探测提前警告（见 StoragePaths.ProbePortableWritable）。
+                var webviewDataDir = Path.Combine(StoragePaths.Root, "WebView2Data");
                 var env = await CoreWebView2Environment.CreateAsync(null, webviewDataDir);
                 await WebViewL.EnsureCoreWebView2Async(env);
                 await WebViewR.EnsureCoreWebView2Async(env);
@@ -704,8 +608,10 @@ window.addEventListener('drop',function(e){
 
             // 导航完成后补推一次主题：任何页面（含错误/加载/占位页）加载完都必然收到当前主题，
             // 即使切换发生在导航进行中，也不会出现"外壳变了 body 没变"的时序窗口。
-            WebViewL.NavigationCompleted += (_, _) => { _ = PushThemeAsync(_theme.Current == _theme.Dark); ApplyPanelZoom(_app.Left); ApplyAnnMode(_app.Left); SyncAnnBtns(); };
-            WebViewR.NavigationCompleted += (_, _) => { _ = PushThemeAsync(_theme.Current == _theme.Dark); ApplyPanelZoom(_app.Right); ApplyAnnMode(_app.Right); SyncAnnBtns(); };
+            // 顺带探测页内是否有可导出图表（ECharts / markmap / Mermaid），据此显隐「导出图表」按钮 ——
+            // 图表 DOM 只有渲染完成后才存在，无法在 C# 侧提前判断。
+            WebViewL.NavigationCompleted += (_, _) => { _ = PushThemeAsync(_theme.Current == _theme.Dark); ApplyPanelZoom(_app.Left); ApplyAnnMode(_app.Left); SyncAnnBtns(); _ = UpdateChartExportAvailabilityAsync(_app.Left!); };
+            WebViewR.NavigationCompleted += (_, _) => { _ = PushThemeAsync(_theme.Current == _theme.Dark); ApplyPanelZoom(_app.Right); ApplyAnnMode(_app.Right); SyncAnnBtns(); _ = UpdateChartExportAvailabilityAsync(_app.Right!); };
 
             // 面板宽度变化（窗口缩放/拖分隔条）时刷新标题栏按钮折叠状态
             WebViewL.SizeChanged += (_, _) => UpdateTitleBarOverflow();
@@ -947,18 +853,8 @@ window.addEventListener('drop',function(e){
             TogglePaletteWindow();
         }
 
-        // ════════ 给独立命令面板窗口 CommandPaletteWindow 调用的转发公开方法（私有方法不暴露） ════════
+        // ════════ 命令面板（CommandPaletteWindow）公开入口见 MainWindow.Palette.cs；以下为该窗口外的共用私有辅助 ════════
 
-        public void ShowOpenForForActive() { if (_activePanel != null) ShowOpenFor(_activePanel); else if (_app.Left != null) ShowOpenFor(_app.Left); }
-        public void OpenActiveWithDefaultAppPublic() => OpenActiveWithDefaultApp();
-        public void RefreshActivePanel()
-        {
-            var t = ActiveOrLeft;
-            if (t != null && !string.IsNullOrEmpty(t.CurrentFile))
-                _ = ReloadFileAsync(t, true, t.ResetCts());
-        }
-        public void ToggleThemePublic() => OnThemeToggle(this, new RoutedEventArgs());
-        public void ToggleSplit() => SetSplitMode(!_app.IsSplitMode);
         /// <summary>确保右侧分栏存在（分栏模式关闭时先开启）——向右栏投递文件的公共前置。</summary>
         private void EnsureRightPanel()
         {
@@ -976,29 +872,6 @@ window.addEventListener('drop',function(e){
             build(win);
             win.ShowDialog();
         }
-        public void TogglePresentationPublic() => TogglePresentation();
-        /// <summary>当前激活面板，未激活（如收起分栏后）回退左栏——命令面板统一入口。</summary>
-        public PanelState? ActiveOrLeft => _activePanel ?? _app.Left;
-        public void ToggleCommandPalette() => TogglePaletteWindow();
-        public void OpenFileInto(PanelState t, string path)
-        {
-            if (t != null && !string.IsNullOrEmpty(path) && File.Exists(path))
-                OpenFileInternal(t, path);
-        }
-        public void ShowFindFor(PanelState t) { if (t != null) ShowFind(t); }
-        public void SetZoomActive(double scale) { var t = ActiveOrLeft; if (t != null) SetZoom(t, scale); }
-        public void SetZoomActiveDelta(double delta) { var t = ActiveOrLeft; if (t != null) SetZoom(t, Math.Clamp(t.FontScale + delta, 0.5, 2.5)); }
-        public void ToggleInfoPanel() => OnToggleInfoPanel(this, new RoutedEventArgs());
-        public void ToggleNotesPanel() => SetNotesPanelVisibility(true);
-        public void ToggleHighlightPen() { var t = ActiveOrLeft; if (t != null) ToggleAnnMode(t); }
-        public void ActivateSideTabPublic(int idx) => ActivateSideTab(idx);
-        public void ToggleEditModePublic() { var t = ActiveOrLeft; if (t != null && CanEditFile(t.CurrentFile)) ToggleEditMode(t); }
-        public void PrintActivePanelPublic() => PrintActivePanel();
-        public void ExportActiveToImage() => OnExportImage(this, new RoutedEventArgs());
-        public void ShowExportDialogForActive() { var t = ActiveOrLeft; if (t != null) ShowExportDialog(t); }
-        public void OpenFileIntoActive(string path) { var t = ActiveOrLeft; if (t != null) OpenFileInto(t, path); }
-        public System.Collections.Generic.IReadOnlyList<string> GetHistoryEntries() => _app?.History.Entries ?? Array.Empty<string>();
-        public void LogErrPublic(string msg) => LogErr(msg);
 
         private void OnWindowKeyDown(object sender, KeyEventArgs e)
         {
@@ -1121,422 +994,6 @@ window.addEventListener('drop',function(e){
             }
         }
 
-        private void OnNavigationStarting(WebView2 view, CoreWebView2NavigationStartingEventArgs e)
-        {
-            var uri = e.Uri;
-            if (string.IsNullOrEmpty(uri)) return;
-            // NavigateToString 内部导航（about:blank）与 data: 页面放行
-            if (uri.StartsWith("about:", StringComparison.OrdinalIgnoreCase)
-                || uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
-                return;
-            if (uri.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
-            {
-                // 收窄：本地文件导航一律取消。应用内渲染全部走 NavigateToString / 虚拟主机，
-                // 不依赖 file: 导航；放行会让恶意文档借 WebView 显示任意本地文件内容。
-                e.Cancel = true;
-                LogWarn("Blocked file: navigation: " + uri);
-                return;
-            }
-            e.Cancel = true;
-            OpenInSystemBrowser(uri);
-        }
-
-        /// <summary>
-        /// 收窄文档虚拟主机（docfiles.example / pdffiles.example）的暴露面：
-        /// 目录映射本身无法限制到单文件，这里用 WebResourceRequested 做白名单——
-        /// 仅放行与当前打开文件同名的请求，其余一律 403。
-        /// 这样即使页面（恶意文档注入的 JS）发起 fetch，也只能取到当前文档本身，
-        /// 无法读取同目录的其他文件。
-        /// </summary>
-        private void GuardDocumentHost(WebView2 view, Func<string?> allowedFile)
-        {
-            var core = view.CoreWebView2;
-            core.AddWebResourceRequestedFilter("https://docfiles.example/*", CoreWebView2WebResourceContext.All);
-            core.AddWebResourceRequestedFilter("https://pdffiles.example/*", CoreWebView2WebResourceContext.All);
-            core.WebResourceRequested += (_, ea) =>
-            {
-                try
-                {
-                    var uri = new Uri(ea.Request.Uri);
-                    // AbsolutePath 对中文/空格文件名是 %XX 编码形式，先解码再取文件名，
-                    // 否则中文文件名请求会被误杀（403）。
-                    var reqName = Path.GetFileName(System.Uri.UnescapeDataString(uri.AbsolutePath));
-                    var allow = allowedFile();
-                    var allowName = string.IsNullOrEmpty(allow) ? "" : Path.GetFileName(allow);
-                    if (string.IsNullOrEmpty(reqName)
-                        || !string.Equals(reqName, allowName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        ea.Response = core.Environment.CreateWebResourceResponse(
-                            null, 403, "Forbidden", "Content-Type: text/plain");
-                        LogWarn("Blocked doc-host resource: " + ea.Request.Uri);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    // fail-closed：URI 解析失败视为不可信请求一律 403。
-                    // 正常渲染的资源请求恒为良构绝对 URL（应用自己拼的虚拟主机地址），
-                    // 走到这里只会是畸形/伪造请求，拒绝不会误伤真实渲染。
-                    ea.Response = core.Environment.CreateWebResourceResponse(
-                        null, 403, "Forbidden", "Content-Type: text/plain");
-                    LogWarn("Blocked malformed doc-host request: " + ex.Message);
-                }
-            };
-        }
-
-        /// <summary>WebView2 渲染进程崩溃恢复：记录 + 自动重载当前文件；连续崩溃 >= 3 次（5 秒窗口）停止重载。</summary>
-        private void OnProcessFailed(PanelState state, CoreWebView2ProcessFailedEventArgs e)
-        {
-            if (!Dispatcher.CheckAccess())
-            {
-                Dispatcher.BeginInvoke(new Action(() => OnProcessFailed(state, e)));
-                return;
-            }
-            try
-            {
-                LogErr($"[WebView] process failed: kind={e.ProcessFailedKind} reason={e.Reason} exit={e.ExitCode}");
-                var file = state.CurrentFile;
-                if (string.IsNullOrEmpty(file)) return;
-
-                // 节流：同一面板 5 秒内连续崩溃才累计，跨时段自动清零
-                var now = DateTime.UtcNow;
-                state.CrashCount = now - state.LastCrashUtc <= TimeSpan.FromSeconds(5)
-                    ? state.CrashCount + 1 : 1;
-                state.LastCrashUtc = now;
-
-                if (state.CrashCount >= 3)
-                {
-                    LogWarn("WebView crashed " + state.CrashCount + " times, auto-reload stopped: " + Path.GetFileName(file));
-                    StatusText.Text = "预览多次崩溃，已停止自动恢复，请重新打开文件或重启应用";
-                    return;
-                }
-
-                // 渲染进程重建需要时间，延迟到下一帧再重载
-                Dispatcher.BeginInvoke(new Action(() =>
-                {
-                    try
-                    {
-                        if (string.IsNullOrEmpty(state.CurrentFile)) return;
-                        _ = ReloadFileAsync(state, true, state.ResetCts());
-                        StatusText.Text = "预览已崩溃，正在自动恢复: " + Path.GetFileName(state.CurrentFile);
-                    }
-                    catch (Exception ex) { LogErr("Auto-reload after crash: " + ex.Message); }
-                }), DispatcherPriority.Background);
-            }
-            catch (Exception ex) { LogErr("OnProcessFailed: " + ex.Message); }
-        }
-
-        private void OnNewWindowRequested(CoreWebView2NewWindowRequestedEventArgs e)
-        {
-            e.Handled = true;
-            if (!string.IsNullOrEmpty(e.Uri))
-                OpenInSystemBrowser(e.Uri);
-        }
-
-        private static void OpenInSystemBrowser(string url)
-        {
-            if (string.IsNullOrEmpty(url)) return;
-            try
-            {
-                var uri = new Uri(url);
-                var scheme = uri.Scheme.ToLowerInvariant();
-                var allowed = new[] { "https", "http", "mailto", "ftp" };
-                if (!allowed.Contains(scheme))
-                {
-                    LogErr("Blocked URL with disallowed scheme: " + scheme);
-                    return;
-                }
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url)
-                {
-                    UseShellExecute = true
-                });
-            }
-            catch (Exception ex)
-            {
-                LogErr("Open link failed: " + ex.Message);
-            }
-        }
-
-        private void OnWebMessage(PanelState state, CoreWebView2WebMessageReceivedEventArgs e)
-        {
-            string? raw = null;
-            try
-            {
-                raw = e.TryGetWebMessageAsString();
-                if (string.IsNullOrEmpty(raw)) return;
-                using var doc = System.Text.Json.JsonDocument.Parse(raw);
-                var root = doc.RootElement;
-                if (!root.TryGetProperty("kind", out var kindEl)) return;
-                var kind = kindEl.GetString();
-                if (kind == "pdf-read-log")
-                {
-                    // PDF 图文重建诊断日志：仅 Debug 构建记录（内容级日志含文本片段，
-                    // Release 不落盘，避免敏感 PDF 内容经日志泄露）。
-#if DEBUG
-                    var msg = root.TryGetProperty("msg", out var mEl) ? mEl.GetString() : "";
-                    if (!string.IsNullOrEmpty(msg)) LogInfo("[PDF-READ] " + msg);
-#endif
-                    return;
-                }
-                if (kind == "pdf-outline")
-                {
-                    // PDF 文本视图大纲：重建脚本完成时上报书签/标题/页标记；令牌校验防过期页面覆盖
-                    var tok = root.TryGetProperty("token", out var tokEl) ? tokEl.GetString() : "";
-                    if (string.IsNullOrEmpty(tok) || tok != state.PdfOutlineToken) return;
-                    if (!root.TryGetProperty("items", out var itemsEl)) return;
-                    var list = new List<TocItem>();
-                    foreach (var itEl in itemsEl.EnumerateArray())
-                    {
-                        var title = itEl.TryGetProperty("t", out var tEl) ? tEl.GetString() ?? "" : "";
-                        var level = itEl.TryGetProperty("l", out var lEl) ? lEl.GetInt32() : 1;
-                        var id = itEl.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? "" : "";
-                        if (!string.IsNullOrEmpty(title) && !string.IsNullOrEmpty(id))
-                            list.Add(new TocItem { Title = title, Level = Math.Max(1, Math.Min(6, level)), Id = id });
-                    }
-                    SetOutline(list.Count > 0 ? list : null);
-                    return;
-                }
-                // 来源校验：仅接受来自当前 WebView 已加载页面的消息，防止伪造 postMessage 干扰 UI 或触发外链。
-                // 任一来源为空（导航早期窗口）一律拒绝——宁可丢消息，不可放行来源不明的伪造消息。
-                var webSrc = state.WebView?.CoreWebView2?.Source;
-                if (string.IsNullOrEmpty(e.Source) || string.IsNullOrEmpty(webSrc) || e.Source != webSrc)
-                    return;
-                if (kind == "scroll" && root.TryGetProperty("y", out var yEl))
-                {
-                    state.LastScrollY = yEl.GetDouble();
-                    // 双栏滚动同步：两侧都是文档类（均含 .md / 均含 .html 页面）时联动机滚动
-                    if (_app.IsSplitMode && !_isSyncingScroll)
-                    {
-                        var other = state == _app.Left ? _app.Right : _app.Left;
-                        if (other?.WebView?.CoreWebView2 != null
-                            && !string.IsNullOrEmpty(other.CurrentFile)
-                            && !string.IsNullOrEmpty(state.CurrentFile))
-                        {
-                            // 限制为同类型文件之间同步（md ↔ md；其他类型不强制同步）
-                            var ext = Path.GetExtension(state.CurrentFile).ToLowerInvariant();
-                            var otherExt = Path.GetExtension(other.CurrentFile).ToLowerInvariant();
-                            if (ext == otherExt)
-                            {
-                                _isSyncingScroll = true;
-                                var y = yEl.GetDouble();
-                                var js = $"window.scrollTo(0, {y.ToString(System.Globalization.CultureInfo.InvariantCulture)})";
-                                try { other.WebView.CoreWebView2.ExecuteScriptAsync(js); } catch { }
-                                // 50ms 后释放防重入锁，避免同步触发的 scroll 事件传回本侧
-                                _ = System.Threading.Tasks.Task.Delay(50).ContinueWith(_ =>
-                                    Dispatcher.BeginInvoke(new Action(() => _isSyncingScroll = false)));
-                            }
-                        }
-                    }
-                }
-                else if (kind == "drop" && root.TryGetProperty("paths", out var pathsEl)
-                         && pathsEl.ValueKind == System.Text.Json.JsonValueKind.Array)
-                {
-                    // WebView 页面内拖入文件（File.path 经 postMessage 传回），与窗口级 WPF 拖放共用打开逻辑
-                    var paths = new List<string>();
-                    foreach (var item in pathsEl.EnumerateArray())
-                    {
-                        var p = item.GetString();
-                        if (!string.IsNullOrEmpty(p)) paths.Add(p);
-                    }
-                    if (paths.Count > 0)
-                    {
-                        var total = paths.Count;
-                        Dispatcher.BeginInvoke(new Action(() =>
-                            OpenDroppedFiles(FilterSupportedFiles(paths), total)));
-                    }
-                }
-                else if (kind == "edit-save" && root.TryGetProperty("text", out var textEl))
-                {
-                    // 编辑页 Ctrl+S：把 textarea 内容写回文件（文本原样写；docx 经 pandoc 回写）
-                    SaveEdit(state, textEl.GetString() ?? "");
-                    return;
-                }
-                else if (kind == "anydoc-result" && root.TryGetProperty("id", out var anyIdEl))
-                {
-                    // anydoc-wasm 转换结果回传：令牌 + 源文件双重校验，过期/跨文件/伪造消息一律忽略
-                    var id = anyIdEl.GetString();
-                    var pending = state.AnyDocPending;
-                    if (pending == null || pending.Token != id || pending.File != state.CurrentFile)
-                        return;
-                    state.AnyDocPending = null;
-                    var ok = root.TryGetProperty("ok", out var okEl) && okEl.GetBoolean();
-                    if (pending.PdfExtract)
-                    {
-                        // PDF 文本层提取模式：结果只写缓存/标记，不渲染（RenderPdf 继续显示 PDF.js）
-                        if (ok && root.TryGetProperty("markdown", out var pdfMdEl)
-                            && !string.IsNullOrEmpty(pdfMdEl.GetString()))
-                        {
-                            var pdfMd = pdfMdEl.GetString()!;
-                            state.PdfText = pdfMd;
-                            state.PdfTextLayer = true;
-                            PdfTextCache.Write(state.CurrentFile, pdfMd);
-                            LogInfo("PDF text layer: " + Path.GetFileName(state.CurrentFile) + " (" + pdfMd.Length + " chars)");
-                        }
-                        else
-                        {
-                            state.PdfText = "";
-                            state.PdfTextLayer = false;
-                            PdfTextCache.WriteNoText(state.CurrentFile);
-                            LogInfo("PDF scan (no text layer): " + Path.GetFileName(state.CurrentFile));
-                        }
-                        pending.ExtractTcs?.TrySetResult(true);
-                        _ = Dispatcher.BeginInvoke(new Action(() => RefreshStats(state))); // 提取完成 → 统计卡刷新
-                        return;
-                    }
-                    if (ok && root.TryGetProperty("markdown", out var mdEl)
-                        && !string.IsNullOrEmpty(mdEl.GetString()))
-                    {
-                        var md = mdEl.GetString();
-                        Dispatcher.BeginInvoke(new Action(async () => await RenderAnyDocMarkdownAsync(state, md!)));
-                    }
-                    else
-                    {
-                        if (root.TryGetProperty("error", out var errEl) && !string.IsNullOrEmpty(errEl.GetString()))
-                            LogErr("AnyDoc convert: " + errEl.GetString());
-                        Dispatcher.BeginInvoke(new Action(async () => await FallbackOfficeAsync(state, pending.Ext)));
-                    }
-                    return;
-                }
-                else if (kind == "link" && root.TryGetProperty("href", out var hrefEl))
-                {
-                    var href = hrefEl.GetString();
-                    if (!string.IsNullOrEmpty(href))
-                    {
-                        // 纵深防御：显式拒绝危险伪协议（XSS 载体），即使 CSP 与 OpenInSystemBrowser 已拦截
-                        var lower = href.ToLowerInvariant();
-                        if (lower.StartsWith("javascript:", StringComparison.OrdinalIgnoreCase)
-                            || lower.StartsWith("vbscript:", StringComparison.OrdinalIgnoreCase))
-                        {
-                            LogErr("Blocked dangerous link scheme: " + lower);
-                            return;
-                        }
-                        if (!(lower.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
-                             || lower.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
-                             || lower.StartsWith("about:", StringComparison.OrdinalIgnoreCase)
-                             || lower.StartsWith("#", StringComparison.Ordinal)))
-                        {
-                            OpenInSystemBrowser(href);
-                        }
-                    }
-                }
-                else if (kind == "dismiss-welcome")
-                {
-                    // 欢迎提示卡片"不再显示"：持久化开关 + 清空为透明背景页
-                    _theme.SetWelcomeDismissed(true);
-                    state.WebView?.NavigateToString(EmptyPage);
-                }
-                else if (kind == "search-result")
-                {
-                    // 页内搜索回报：更新打开中的搜索栏结果文案
-                    var count = root.TryGetProperty("count", out var cEl) ? cEl.GetInt32() : 0;
-                    var current = root.TryGetProperty("current", out var iEl) ? iEl.GetInt32() : 0;
-                    StatusText.Text = count > 0 ? $"找到 {count} 处，当前第 {current} 处" : "未找到匹配内容";
-                }
-                else if (kind == "open-file")
-                {
-                    // 点击欢迎提示卡片 → 打开文件
-                    _activePanel = state;
-                    UpdateActivePanelVisual();
-                    ShowOpenFor(state);
-                }
-                else if (kind == "highlight-add" && root.TryGetProperty("id", out var annIdEl) && root.TryGetProperty("text", out var annTextEl))
-                {
-                    // 高亮笔：JS 已把选区包裹为 <mark>，这里写入 HighlightStore（按文件路径持久化）
-                    var id = annIdEl.GetString();
-                    var text = annTextEl.GetString();
-                    if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(text) || string.IsNullOrEmpty(state.CurrentFile)) return;
-                    var ctx = root.TryGetProperty("context", out var ctxEl) ? ctxEl.GetString() ?? "" : "";
-                    _highlights.Add(new HighlightItem { Id = id, File = state.CurrentFile, Text = text, Context = ctx });
-                }
-                else if (kind == "highlight-remove" && root.TryGetProperty("id", out var remIdEl))
-                {
-                    // 右键点击页面标注 → 删除（JS 已同步移除 mark）
-                    var id = remIdEl.GetString();
-                    if (!string.IsNullOrEmpty(id)) _highlights.Remove(id);
-                }
-                else if (kind == "highlight-fail" && root.TryGetProperty("text", out var annFailEl))
-                {
-                    // 高亮笔选区跨格式边界（strong/em/链接等）时 DOM 无法直接包裹：
-                    // 明确提示用户改选纯文本，避免"画了没反应/字消失"的假象
-                    var t = annFailEl.GetString() ?? "";
-                    if (t.Length > 40) t = t.Substring(0, 40) + "…";
-                    StatusText.Text = "标注失败：选区跨了格式边界（粗体/斜体/链接），请整段只选普通文本。";
-                }
-                else if (kind == "highlight-click")
-                {
-                    // 点击页面高亮标注 → 打开右侧面板查看/管理（未开才开，避免打断阅读）
-                    if (NotesPanel != null && NotesPanel.Visibility != Visibility.Visible)
-                        SetNotesPanelVisibility(true);
-                }
-                else if (kind == "palette-toggle")
-                {
-                    // WebView 内键盘桥接（Ctrl+Shift+P）→ 切换命令面板，绕开 Chromium/WPF 焦点吞键
-                    ToggleCommandPalette();
-                }
-            }
-            catch (Exception ex) { LogErr("Web msg parse: " + ex.Message + " | rawLen=" + (raw?.Length ?? -1)); }
-        }
-
-        /// <summary>
-        /// 隐藏提取 WebView 的消息入口：anydoc-result 按令牌匹配正在提取的面板（双栏并发安全），
-        /// PDF 文本层结果只写缓存/标记，不渲染；完成后刷新统计卡与查看器徽标。
-        /// </summary>
-        private void OnExtractMessage(CoreWebView2WebMessageReceivedEventArgs e)
-        {
-            string? raw = null;
-            try
-            {
-                raw = e.TryGetWebMessageAsString();
-                if (string.IsNullOrEmpty(raw)) return;
-                using var doc = System.Text.Json.JsonDocument.Parse(raw);
-                var root = doc.RootElement;
-                if (!root.TryGetProperty("kind", out var kindEl) || kindEl.GetString() != "anydoc-result") return;
-                if (!root.TryGetProperty("id", out var idEl)) return;
-
-                // 按令牌找到发起提取的面板（AnyDocPending 每面板单槽，双栏并发各自匹配）
-                PanelState? state = null;
-                foreach (var st in new[] { _app.Left, _app.Right })
-                {
-                    if (st?.AnyDocPending is { PdfExtract: true } p && p.Token == idEl.GetString())
-                    { state = st; break; }
-                }
-                if (state == null) return;
-                var pending = state.AnyDocPending;
-                if (pending == null || pending.File != state.CurrentFile) return;
-                state.AnyDocPending = null;
-
-                var ok = root.TryGetProperty("ok", out var okEl) && okEl.GetBoolean();
-                if (ok && root.TryGetProperty("markdown", out var mdEl) && !string.IsNullOrEmpty(mdEl.GetString()))
-                {
-                    var md = mdEl.GetString()!;
-                    state.PdfText = md;
-                    state.PdfTextLayer = true;
-                    PdfTextCache.Write(state.CurrentFile, md);
-                    LogInfo("PDF text layer: " + Path.GetFileName(state.CurrentFile) + " (" + md.Length + " chars)");
-                }
-                else if (ok)
-                {
-                    // anydoc 成功但无文本 → 真·扫描版：写 .no 标记（仅此类写入，避免污染缓存）
-                    state.PdfText = "";
-                    state.PdfTextLayer = false;
-                    PdfTextCache.WriteNoText(state.CurrentFile);
-                    LogInfo("PDF scan (no text layer): " + Path.GetFileName(state.CurrentFile));
-                }
-                else
-                {
-                    // 提取出错（worker/fetch/wasm 失败）：不写 .no——否则错误被当作"扫描版"永久缓存，
-                    // 后续打开不再重试（曾致文本型 PDF 永远进不了文本视图）。
-                    state.PdfText = "";
-                    state.PdfTextLayer = null;
-                    var err = root.TryGetProperty("error", out var errEl) ? errEl.GetString() : "";
-                    LogErr("Pdf text extract failed: " + Path.GetFileName(state.CurrentFile)
-                           + (string.IsNullOrEmpty(err) ? "" : " | " + err));
-                }
-                pending.ExtractTcs?.TrySetResult(true);
-                // 查看器已先行显示：刷新统计卡 + 注入文本层/扫描版徽标
-                _ = Dispatcher.BeginInvoke(new Action(() => RefreshStats(state)));
-            }
-            catch (Exception ex) { LogErr("Extract msg: " + ex.Message + " | raw=" + (raw ?? "<null>")); }
-        }
 
         private void OnOpenL(object sender, RoutedEventArgs e)
         {

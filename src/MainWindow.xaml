@@ -288,9 +288,36 @@
                                                     </Style>
                                                 </Border.Style>
                                             </Border>
-                                            <TextBlock Grid.Column="1" Text="{Binding Display}" TextTrimming="CharacterEllipsis"
-                                                       ToolTip="{Binding Full}" VerticalAlignment="Center" FontSize="12"
-                                                       Foreground="{DynamicResource TextBodyBrush}" Margin="7,7,7,7"/>
+                                            <StackPanel Grid.Column="1" Margin="7,6,7,6">
+                                                <TextBlock Text="{Binding Display}" TextTrimming="CharacterEllipsis"
+                                                           ToolTip="{Binding Full}" VerticalAlignment="Center" FontSize="12"
+                                                           Foreground="{DynamicResource TextBodyBrush}"/>
+                                                <!-- 阅读进度条：仅有进度（读到 1%~99%）时显示。
+                                                     轨道 60px 固定宽，填充宽度由 RecentItem.ProgressWidth 折算传入。
+                                                     全部走主题资源，暗色自动适配。 -->
+                                                <Grid x:Name="ProgRow" Margin="0,4,0,0" Visibility="Collapsed">
+                                                    <Grid.Style>
+                                                        <Style TargetType="Grid">
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding HasProgress}" Value="True">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Grid.Style>
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <Border Width="60" Height="2" CornerRadius="1" VerticalAlignment="Center"
+                                                                Background="{DynamicResource LightGrayBrush}">
+                                                            <Border HorizontalAlignment="Left"
+                                                                    Width="{Binding ProgressWidth}" Height="2" CornerRadius="1"
+                                                                    Background="{DynamicResource AccentBrush}"/>
+                                                        </Border>
+                                                        <TextBlock Text="{Binding ProgressText}" FontSize="9" Margin="5,0,0,0"
+                                                                   VerticalAlignment="Center"
+                                                                   Foreground="{DynamicResource TextBodyBrush}" Opacity="0.65"/>
+                                                    </StackPanel>
+                                                </Grid>
+                                            </StackPanel>
                                         </Grid>
                                     </Border>
                                 </DataTemplate>
@@ -331,6 +358,7 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="📑 大纲" FontSize="11" FontWeight="SemiBold"
                                        Foreground="{DynamicResource TextSecondaryBrush}"
@@ -339,7 +367,11 @@
                             <TextBlock Grid.Column="1" x:Name="OutlineCount" FontSize="10"
                                        Foreground="{DynamicResource TextSecondaryBrush}"
                                        VerticalAlignment="Center" Visibility="Collapsed" Margin="0,0,6,0"/>
-                            <Button Grid.Column="2" x:Name="OutlineMapBtn" Style="{StaticResource ChipBtn}"
+                            <Button Grid.Column="2" x:Name="OutlineFloatBtn" Style="{StaticResource ChipBtn}"
+                                    FontSize="10" Padding="6,2" Content="⇱ 浮动" Click="OnOutlineFloatToggle"
+                                    ToolTip="把大纲浮到文档上方（可拖动 / 滚动自动跟随；再点一次收回）"
+                                    Margin="0,0,4,0"/>
+                            <Button Grid.Column="3" x:Name="OutlineMapBtn" Style="{StaticResource ChipBtn}"
                                     FontSize="10" Padding="6,2" Content="🗺 导图" Click="OnOutlineMapToggle"
                                     ToolTip="切换大纲列表 / 思维导图视图"/>
                         </Grid>
@@ -735,6 +767,12 @@
                         <Button x:Name="ImgExportBtn" Style="{StaticResource StatusBtn}" Content="导出图片" FontSize="10"
                                 Margin="0,0,6,0" Click="OnExportImage"
                                 ToolTip="将当前预览截图保存为 PNG"/>
+                        <Button x:Name="ChartExportBtn" Style="{StaticResource StatusBtn}" Content="导出图表" FontSize="10"
+                                Margin="0,0,6,0" Click="OnExportChart" Visibility="Collapsed"
+                                ToolTip="把页内 ECharts / markmap / Mermaid 图表导出为 PNG 或 SVG（仅文档含图表时可用）"/>
+                        <Button x:Name="OutlineFloatStatusBtn" Style="{StaticResource StatusBtn}" Content="浮动大纲" FontSize="10"
+                                Margin="0,0,6,0" Click="OnOutlineFloatToggle"
+                                ToolTip="把大纲浮到文档上方：可拖动、随滚动高亮跟随（也可从左侧「大纲」Tab 的「⇱ 浮动」开启）"/>
                         <Button x:Name="NotesToggleBtn" Style="{StaticResource StatusBtn}" Content="笔记" FontSize="10"
                                 Margin="0,0,6,0" Click="OnToggleNotesPanel"
                                 ToolTip="打开/关闭笔记面板（列出当前文件标注，可添加笔记并导出）"/>
@@ -754,6 +792,71 @@
                             </StackPanel>
                         </Button>
                     </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- ═══ 浮动大纲（项6）：叠在文档上方，可拖动、随滚动高亮跟随 ═══
+                 放在 ContentGrid 内（而非独立 Window）——这样裁剪在内容区圆角内，
+                 最小化/托盘隐藏随主窗自动生效，无需生命周期管理。
+                 缩放条在状态栏（Row 1），本层在 Row 0，不会被盖住。 -->
+            <Border x:Name="OutlineFloat" Grid.Row="0"
+                    Visibility="Collapsed"
+                    HorizontalAlignment="Left" VerticalAlignment="Top"
+                    Margin="14,64,0,0"
+                    Width="228" MaxHeight="420"
+                    Background="{DynamicResource CardBackgroundBrush}"
+                    CornerRadius="{DynamicResource InputRadius}"
+                    BorderThickness="1" BorderBrush="{DynamicResource LightGrayBrush}"
+                    Effect="{DynamicResource CardShadow}"
+                    Opacity="0.96">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <!-- 标题栏：兼作拖动把手 -->
+                    <Grid x:Name="OutlineFloatBar" Grid.Row="0" Margin="10,8,8,4" Background="Transparent"
+                          MouseLeftButtonDown="OnOutlineFloatDrag">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="📑 大纲" FontSize="11" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   TextOptions.TextFormattingMode="Display"
+                                   VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" x:Name="OutlineFloatCount" FontSize="10"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <Button Grid.Column="2" x:Name="OutlineFloatCloseBtn"
+                                Width="22" Height="22" Padding="0" Background="Transparent"
+                                BorderThickness="0" Cursor="Hand" FontSize="14" FontWeight="Bold"
+                                Foreground="{DynamicResource TextSecondaryBrush}" Content="×"
+                                Click="OnOutlineFloatToggle" ToolTip="收回浮动大纲"/>
+                    </Grid>
+                    <ListBox x:Name="OutlineFloatList" Grid.Row="1" FontSize="11"
+                             Margin="4,0,4,6" MaxHeight="360"
+                             Background="Transparent" BorderThickness="0"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             ItemContainerStyle="{StaticResource SidebarItem}"
+                             MouseLeftButtonUp="OnOutlineClick">
+                        <ListBox.Template>
+                            <ControlTemplate TargetType="ListBox">
+                                <Border Background="{TemplateBinding Background}"
+                                        BorderBrush="{TemplateBinding BorderBrush}"
+                                        BorderThickness="{TemplateBinding BorderThickness}">
+                                    <ScrollViewer Style="{DynamicResource ThemedScrollViewer}"
+                                                  Focusable="False"
+                                                  HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}"
+                                                  VerticalScrollBarVisibility="{TemplateBinding ScrollViewer.VerticalScrollBarVisibility}">
+                                        <ItemsPresenter/>
+                                    </ScrollViewer>
+                                </Border>
+                            </ControlTemplate>
+                        </ListBox.Template>
+                    </ListBox>
                 </Grid>
             </Border>
         </Grid>

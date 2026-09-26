@@ -132,6 +132,29 @@ dotnet publish -c Release -p:PublishSingleFile=true -r win-x64
 
 ---
 
+## ⚙ 环境变量
+
+全部为**可选**，不设置时对应功能自动关闭，应用照常运行。
+
+| 变量 | 作用 | 缺省行为 |
+|------|------|----------|
+| `SEEME_SENTRY_DSN` | 崩溃与异常上报的 Sentry DSN。设置后启用上报 | 不设置 → 关闭，不发送任何数据 |
+| `VELOPACK_FEED` | 自动更新源地址（如 GitHub Releases 目录）。设置后启动时检查更新 | 不设置 → 关闭，不联网检查 |
+| `SEEME_PANDOC_DIR` | 指定 Pandoc 可执行文件所在目录（用于导出 Word/PDF 等） | 不设置 → 依次尝试 PATH 中的 `pandoc`、应用目录下的 `tools/pandoc` |
+
+`SEEME_PANDOC_DIR` 示例（Windows）：
+
+```powershell
+# 本次会话生效
+$env:SEEME_PANDOC_DIR = "D:\allll\pandoc"
+# 永久生效（当前用户）
+[Environment]::SetEnvironmentVariable("SEEME_PANDOC_DIR", "D:\allll\pandoc", "User")
+```
+
+> 日志默认写入 `%LOCALAPPDATA%\SeeMe\logs\seeme.log`（单文件滚动，上限 512 KB，超限轮转为 `seeme.log.1`）。`Warn` / `Error` 级别在 Release 构建下仍会落盘，`Info` 仅在 Debug 构建下记录。
+
+---
+
 ## 📜 许可证
 
 基于 **MIT 许可证** 开源，详见仓库根目录 `LICENSE` 文件。

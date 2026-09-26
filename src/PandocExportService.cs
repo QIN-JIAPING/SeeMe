@@ -232,9 +232,7 @@ namespace SeeMe
 
         // ──────────────── 设置持久化 ────────────────
 
-        private string StoragePath => Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "SeeMe", SettingsFile);
+        private string StoragePath => StoragePaths.Combine(SettingsFile);
 
         public void LoadSettings()
         {

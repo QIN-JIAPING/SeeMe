@@ -10,17 +10,67 @@
     <AssemblyName>SeeMe</AssemblyName>
     <RootNamespace>SeeMe</RootNamespace>
     <Version>1.0.3</Version>
+    <!-- 版本相关的标准属性：SDK 会从这些派生出程序集版本特性。
+         改版本只需改上面的 <Version> —— 下面三项一律引用它，不要写死。 -->
+    <AssemblyVersion>$(Version).0</AssemblyVersion>
+    <FileVersion>$(Version).0</FileVersion>
+    <InformationalVersion>$(Version)</InformationalVersion>
+    <!-- 供 tools/ 的脚本读取（发布脚本、位图版本号），避免各脚本各自正则解析 <Version> -->
+    <SeeMeSemanticVersion>$(Version)</SeeMeSemanticVersion>
+    <!-- 这些元数据放在 csproj（而不是手写 AssemblyInfo.cs）里，让 SDK 统一生成，
+         避免「同一个特性声明两遍」——C# 不允许重复的 assembly 特性。 -->
+    <AssemblyTitle>SeeMe</AssemblyTitle>
+    <Description>Markdown / PDF / Office 多格式文档预览器</Description>
+    <Company>SeeMe</Company>
+    <Product>SeeMe</Product>
+    <Copyright>Copyright (c) 2026 SeeMe. MIT License.</Copyright>
     <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
     <LangVersion>latest</LangVersion>
     <ApplicationManifest>src\app.manifest</ApplicationManifest>
     <EnableDefaultPageItems>false</EnableDefaultPageItems>
     <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
-    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <!-- 🔴 GenerateAssemblyInfo 必须保持 **true**（默认值）。
+         曾经的错误做法是把它设为 false + 在 csproj 里放 <AssemblyAttribute> ItemGroup，
+         但那些 item 只会被 GenerateAssemblyInfo 这个 target 消费，而该 target 的
+         Condition 正是 '$(GenerateAssemblyInfo)' == 'true' —— 关掉它 = 那些 item 被静默忽略，
+         结果 exe 的文件版本变成 0.0.0.0（比原来硬编码 1.0.1.0 更糟），且没有任何编译警告。
+         现在改为：开回 true，让 SDK 从上面的 <Version>/<AssemblyTitle> 等标准属性生成特性；
+         手写 AssemblyInfo.cs 只保留 SDK 生成不出来的 ComVisible / ThemeInfo。 -->
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
     <NoWarn>CA1416;WFAC010</NoWarn>
     <!-- 测试项目在子目录，默认 Compile glob（**/*.cs）会误把测试文件编进主项目（主项目无 xunit 引用 → Fact 未找到） -->
     <DefaultItemExcludes>$(DefaultItemExcludes);SeeMe.Tests\**</DefaultItemExcludes>
+    <!-- src\*.cs 走默认 Compile glob，无需显式列出。
+        MainWindow 为 partial class，按职责拆分（勿在别处重复定义同名成员）：
+          MainWindow.xaml.cs            窗口生命周期 / 主题 / 快捷键 / 启动装配
+          MainWindow.WebView.cs         WebView2 导航守卫 / 崩溃恢复 / 外链安全
+          MainWindow.Messages.cs        WebView2 → 宿主消息入口（解析与分发）
+          MainWindow.Files.cs           打开 / 保存 / 最近文件
+          MainWindow.Rendering.cs       渲染调度 / 错误页 / 大纲 / 统计 / 图片导出
+          MainWindow.Rendering.Pdf.cs   PDF / Excel(Univer) / PPTX 渲染
+          MainWindow.Rendering.AnyDoc.cs anydoc-wasm 转 Markdown + Office 回退
+          MainWindow.Interact.cs        页内查找 / 缩放对话框
+          MainWindow.Edit.cs            编辑模式（进出 / 保存 / 另存）
+          MainWindow.Panels.cs          侧边栏面板
+          MainWindow.Notes.cs           标注与笔记
+          MainWindow.Settings.cs        设置的即时应用（Apply*Now：改一项立即生效）
+          MainWindow.Watchers.cs        文件监听
+          MainWindow.Log.cs             日志快捷方式（零 IO 薄壳，全部转发到 SeeMeLog）
+          MainWindow.Palette.cs         命令面板对外入口（public 转发壳）
+        RenderService 同为 partial，见 .Css.cs / .Pages.cs / .Scripts.cs。
+        SeeMeLog 是唯一的日志实现（public static class，三通道：Info 仅 Debug / Warn / Error 落盘）。 -->
   </PropertyGroup>
+
+  <!-- ═══════ 版本号：唯一来源 = 上方 <Version> ═══════
+       改版本只改 <Version> 一处：
+         · AssemblyVersion / FileVersion / InformationalVersion 在同目录的 PropertyGroup 里
+           以 $(Version) 派生（上面已配好）；
+         · SDK 的 GenerateAssemblyInfo 会读取它们，生成对应的程序集特性；
+         · tools/ 的脚本读 <SeeMeSemanticVersion>（同样是 $(Version) 的派生）。
+       因此 exe 属性、安装包名、ZIP 名三处版本必然一致。
+       （曾经的做法是 GenerateAssemblyInfo=false + <AssemblyAttribute> ItemGroup，
+        那条路走不通：该 target 被关掉后 ItemGroup 会被静默忽略，见上面的注释。） -->
 
   <ItemGroup>
     <PackageReference Include="Lucene.Net" Version="4.8.0-beta00016" />

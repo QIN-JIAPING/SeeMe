@@ -480,6 +480,38 @@
                                      Background="{DynamicResource InputBgBrush}" BorderThickness="0"
                                      Foreground="{DynamicResource TextSecondaryBrush}"/>
                             <TextBlock Style="{StaticResource SubNote}" Text="历史、书签与设置存储于该目录。" Margin="0,4,0,12"/>
+
+                            <!-- ════════ 便携模式 ════════
+                                 数据跟着程序走（U 盘/移动硬盘场景）。切换只改标记文件，
+                                 不做自动迁移 —— 老数据留在 AppData 里，需用户点「迁移」显式搬过来。
+                                 设计动因见 StoragePaths 类注释。 -->
+                            <TextBlock Style="{StaticResource RowLabel}" Text="便携模式" Margin="0,0,0,4"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="150"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <ComboBox Style="{StaticResource SettingsCombo}" x:Name="PortableBox" Grid.Column="1"
+                                          Width="220" HorizontalAlignment="Left" SelectionChanged="OnPortableChanged">
+                                    <ComboBoxItem Content="关闭（数据存于 AppData）"/>
+                                    <ComboBoxItem Content="开启（数据存于程序目录 data\）"/>
+                                </ComboBox>
+                            </Grid>
+                            <TextBlock x:Name="PortableWarnText" Style="{StaticResource SubNote}" Visibility="Collapsed"
+                                       Foreground="{DynamicResource DangerBrush}" TextWrapping="Wrap" Margin="150,4,0,0"/>
+                            <Grid Margin="150,6,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Button x:Name="PortableMigrateBtn" Content="迁移现有数据" Style="{StaticResource ChipBtn}"
+                                        Padding="14,5" FontSize="11" Click="OnPortableMigrate"/>
+                                <TextBlock Grid.Column="1" Style="{StaticResource SubNote}" VerticalAlignment="Center"
+                                           Margin="10,0,0,0" TextWrapping="Wrap"
+                                           Text="把 AppData 里的设置/历史/标注/笔记/书签复制到便携目录（不删除源文件）。"/>
+                            </Grid>
+                            <TextBlock Style="{StaticResource SubNote}" Margin="0,4,0,12" TextWrapping="Wrap"
+                                       Text="⚠ 开启后**不会自动搬迁**原有数据，需点上方的「迁移」；切换需重启应用完全生效。"/>
                             <TextBlock Style="{StaticResource RowLabel}" Text="缓存管理" Margin="0,0,0,4"/>
                             <Grid>
                                 <Grid.ColumnDefinitions>

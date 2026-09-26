@@ -4,6 +4,7 @@
 using System;
 using System.IO;
 using System.Reflection;
+using System.Threading.Tasks;
 using System.Windows;
 using Sentry;
 using Velopack;
@@ -23,6 +24,8 @@ namespace SeeMe
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
+            // 崩溃日志必须最先注册：越早越能覆盖启动阶段的异常。
+            RegisterCrashLogging();
             InitSentry();
             InitAutoUpdate();
             // 应用级单例主题：所有窗口共享同一 ThemeManager，任一窗口切换主题，
@@ -80,6 +83,11 @@ namespace SeeMe
         /// 崩溃上报（Sentry）：仅在环境变量 SEEME_SENTRY_DSN 存在时启用，
         /// 不硬编码 DSN，未配置则零开销零网络。捕获 WPF 派发线程未处理异常。
         /// </summary>
+        /// <remarks>
+        /// 注意：本地崩溃落盘（<see cref="SeeMeLog.Error(string, Exception)"/>）**不在此方法内**注册，
+        /// 而是无条件注册于 <see cref="RegisterCrashLogging"/>——否则未配置 Sentry 的用户
+        /// 崩溃时将不留任何本地痕迹，无法排查。
+        /// </remarks>
         private void InitSentry()
         {
             var dsn = Environment.GetEnvironmentVariable("SEEME_SENTRY_DSN");
@@ -96,15 +104,41 @@ namespace SeeMe
                     o.SendDefaultPii = false;   // 不上报个人信息
                     o.MaxBreadcrumbs = 50;
                 });
-                DispatcherUnhandledException += (_, args) =>
-                {
-                    try { SentrySdk.CaptureException(args.Exception); } catch { }
-                };
             }
             catch
             {
                 // Sentry 初始化失败不影响主程序
             }
+        }
+
+        /// <summary>
+        /// 本地崩溃日志：<b>无条件注册</b>（与 Sentry 无关）。
+        /// 未捕获异常落盘到 %LOCALAPPDATA%\SeeMe\logs\seeme.log，
+        /// 保证即使没有配置 Sentry，用户报障时也有据可查。
+        /// 覆盖三条路径：UI 线程（DispatcherUnhandledException）、后台任务
+        /// （TaskScheduler.UnobservedTaskException）、非 UI 线程未捕获（AppDomain.UnhandledException）。
+        /// </summary>
+        private void RegisterCrashLogging()
+        {
+            DispatcherUnhandledException += (_, args) =>
+            {
+                try { SeeMeLog.Error("Unhandled(UI)", args.Exception); } catch { }
+                try { SentrySdk.CaptureException(args.Exception); } catch { }   // 未启用 Sentry 时为 no-op
+            };
+
+            TaskScheduler.UnobservedTaskException += (_, args) =>
+            {
+                try { SeeMeLog.Error("Unhandled(Task)", args.Exception); } catch { }
+                args.SetObserved();   // 标记已观察，避免进程被终结
+            };
+
+            AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+            {
+                if (args.ExceptionObject is Exception ex)
+                {
+                    try { SeeMeLog.Error("Unhandled(AppDomain)", ex); } catch { }
+                }
+            };
         }
 
         protected override void OnExit(ExitEventArgs e)
@@ -135,7 +169,8 @@ namespace SeeMe
             }
             catch (Exception ex)
             {
-                SeeMeLog.Info("InitTray", ex.Message);
+                // 托盘初始化失败 → 最小化到托盘后窗口可能找不回来。留档。
+                SeeMeLog.Error("InitTray", ex);
             }
         }
 
