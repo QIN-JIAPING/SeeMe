@@ -130,6 +130,13 @@ dotnet publish -c Release -p:PublishSingleFile=true -r win-x64
 
 生成物位于 `bin/Release/net8.0-windows/`；单文件发布产物在输出目录（含 `Resources/` 离线资源，需与 exe 同目录）。
 
+> **发布安装包请用 `tools\publish-installer.cmd`**，不要手工拼步骤。它从
+> `SeeMe.csproj` 的 `<Version>` 读版本（单一来源），依次执行：生成 → 单文件发布到
+> `D:\allll\SeeMeOut` → 静态检查 → 测试门禁 → 便携 ZIP → NSIS 安装包。
+> 注意安装包打包的是**发布目录**而非 `bin/Release`，所以这一步不能省 ——
+> 否则安装包名字取自新版本、里面装的却可能是旧 exe（本仓库实测踩过此坑）。
+> NSIS 在编译期会校验待打包 exe 的文件版本，不一致直接中止。
+
 ---
 
 ## ⚙ 环境变量
