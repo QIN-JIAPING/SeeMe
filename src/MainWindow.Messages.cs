@@ -258,6 +258,33 @@ namespace SeeMe
                     // WebView 内键盘桥接（Ctrl+Shift+P）→ 切换命令面板，绕开 Chromium/WPF 焦点吞键
                     ToggleCommandPalette();
                 }
+                else if (kind == "presentation-toggle")
+                {
+                    // WebView 内键盘桥接（F11）→ 演示/专注模式。
+                    // 前端（RenderService.Scripts.cs 的键盘处理器）在 WebView 有焦点时先拦下 F11 并
+                    // preventDefault，按键不会冒泡到 WPF，因此必须走本分支；否则只有焦点在宿主控件上
+                    // 时 F11 才生效（表现为「有时能用有时不能用」）。
+                    // 帧来源校验已在上面统一做过（e.Source == webSrc）。
+                    if (_app.IsSplitMode) _activePanel = state;
+                    TogglePresentation();
+                }
+                else if (kind == "image-loaded")
+                {
+                    // 图片查看页回报实际解码尺寸（前端 <img> load 事件）。
+                    // 渲染时从文件头解析的尺寸可能不准（渐进式 JPEG / EXIF 方向 / 容器与实际不符），
+                    // 这里以浏览器实际解码值为准。仅在数字合法时采纳，防止伪造消息写入垃圾值。
+                    var iw = root.TryGetProperty("w", out var iwEl)
+                             && iwEl.ValueKind == System.Text.Json.JsonValueKind.Number ? iwEl.GetInt32() : 0;
+                    var ih = root.TryGetProperty("h", out var ihEl)
+                             && ihEl.ValueKind == System.Text.Json.JsonValueKind.Number ? ihEl.GetInt32() : 0;
+                    if (iw > 0 && ih > 0 && iw <= Limits.MaxImagePixels && ih <= Limits.MaxImagePixels)
+                    {
+                        state.ImageWidth = iw;
+                        state.ImageHeight = ih;
+                        // 统计卡此刻可能仍显示文件头解析出的旧尺寸，刷新一次
+                        _ = Dispatcher.BeginInvoke(new Action(() => RefreshStats(state)));
+                    }
+                }
                 else if (kind == "copy-text" && root.TryGetProperty("text", out var copyEl)
                          && copyEl.ValueKind == System.Text.Json.JsonValueKind.String)
                 {

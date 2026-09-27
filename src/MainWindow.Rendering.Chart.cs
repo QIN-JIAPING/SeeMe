@@ -69,10 +69,12 @@ namespace SeeMe
                         ? "chart" : Path.GetFileNameWithoutExtension(state.CurrentFile)
                 };
                 // 页面侧按 (kind, index) 定位图表；kind 是固定枚举值，index 是数字，无注入面。
+                // token 原样传给页面，页面回传后由 HandleChartExportAsync 校验，丢弃过期/伪造回传。
                 var js = "if(window.__seemeExportChart)window.__seemeExportChart("
                          + System.Text.Json.JsonSerializer.Serialize(chartKind) + ","
                          + index.ToString(System.Globalization.CultureInfo.InvariantCulture) + ","
-                         + System.Text.Json.JsonSerializer.Serialize(format) + ");";
+                         + System.Text.Json.JsonSerializer.Serialize(format) + ","
+                         + System.Text.Json.JsonSerializer.Serialize(token) + ");";
                 StatusText.Text = "正在导出图表…";
                 await state.WebView.CoreWebView2.ExecuteScriptAsync(js);
             }
@@ -95,9 +97,13 @@ namespace SeeMe
             try
             {
                 if (pending == null) return;
-                // 令牌校验：过期/伪造的回传一律丢弃（与 anydoc-result 同一口径）
-                var tok = root.TryGetProperty("token", out var tokEl) ? tokEl.GetString() : "";
-                if (!string.IsNullOrEmpty(tok) && tok != pending.Token) return;
+                // 令牌校验：过期/伪造的回传一律丢弃（与 anydoc-result 同一口径）。
+                // ⚠️ 必须要求令牌**存在且完全相等**，不能写成「空令牌放行」——
+                // 页面侧 __seemeExportChart 从不回传 token 字段，用 `!string.IsNullOrEmpty(tok) && ...`
+                // 会让校验恒等于没做：任何页面只要 postMessage 一个 {kind:'chart-export', data:...}
+                // 就能顶替用户真正选中的那次导出。当前会话令牌是实现里的唯一来源，缺令牌即视为伪造。
+                var tok = root.TryGetProperty("token", out var tokEl) ? tokEl.GetString() : null;
+                if (tok != pending.Token) return;
 
                 if (!root.TryGetProperty("data", out var dataEl)
                     || dataEl.ValueKind != System.Text.Json.JsonValueKind.String)

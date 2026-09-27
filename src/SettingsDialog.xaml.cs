@@ -304,7 +304,10 @@ namespace SeeMe
         /// <summary>计算并显示 WebView2 缓存目录大小（后台线程，避免大目录卡 UI）。</summary>
         private void RefreshCacheInfo()
         {
-            var cache = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "SeeMe.exe.WebView2");
+            // ⚠️ 必须用 StoragePaths.WebView2DataDir（= MainWindow 传给 CoreWebView2Environment 的那个目录）。
+            // 曾硬编码 exe 旁的 "SeeMe.exe.WebView2"：该目录在显式指定 UserDataFolder 后根本不会被创建，
+            // 于是这里永远显示"未生成缓存"，而真实缓存（数百 MB）从未被清掉。
+            var cache = StoragePaths.WebView2DataDir;
             if (!Directory.Exists(cache))
             {
                 CacheBox.Text = "（未生成 WebView2 缓存）";
@@ -330,7 +333,8 @@ namespace SeeMe
 
         private void OnClearCache(object sender, RoutedEventArgs e)
         {
-            var cache = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "SeeMe.exe.WebView2");
+            // 与 RefreshCacheInfo 同源，见其注释：不能用 exe 旁的旧路径
+            var cache = StoragePaths.WebView2DataDir;
             if (!Directory.Exists(cache))
             {
                 CacheBox.Text = "（未生成 WebView2 缓存）";
@@ -532,7 +536,7 @@ namespace SeeMe
             AppSettings.Set(AppSettings.PdfWatermarkTextKey, PdfWatermarkTextBox.Text ?? "");
         }
 
-        private void OnExportPdf(object sender, RoutedEventArgs e)
+        private async void OnExportPdf(object sender, RoutedEventArgs e)
         {
             var dlg = new Microsoft.Win32.SaveFileDialog
             {
@@ -544,7 +548,9 @@ namespace SeeMe
             PdfExportHint.Text = "正在导出…";
             try
             {
-                _owner.ExportActivePanelToPdf(dlg.FileName,
+                // await：导出方法现在返回 Task，异常能精确回到这里 —— 见其 XML 注释里
+                // 关于 async void 会吞掉 await 之后异常的说明。
+                await _owner.ExportActivePanelToPdf(dlg.FileName,
                     includeToc: AppSettings.Get(AppSettings.PdfIncludeTocKey, true),
                     showPageNumber: AppSettings.Get(AppSettings.PdfPageNumberKey, true),
                     enableWatermark: AppSettings.Get(AppSettings.PdfWatermarkKey, false),

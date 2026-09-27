@@ -235,6 +235,13 @@ namespace SeeMe
                 }
                 var ext = Path.GetExtension(path);
 
+                // ── 图片（项3）：字数/行数不适用，改显示像素尺寸 ──
+                if (FileTypes.IsImage(ext))
+                {
+                    RefreshImageStats(state, path);
+                    return;
+                }
+
                 // ── Markdown ──
                 if (FileTypes.IsMarkdown(ext))
                 {
@@ -303,37 +310,87 @@ namespace SeeMe
             catch (Exception ex) { LogErr("RefreshStats: " + ex.Message); }
         }
 
-        /// <summary>粗略统计 PDF 页数：扫描文件字节中的 "/Type /Page"（排除 "/Type /Pages"）。
-        /// 对象流压缩的 PDF 可能低估，仅作估算（文本视图下无其他页数来源）。</summary>
-        private static int CountPdfPages(string path)
+        /// <summary>
+        /// 刷新信息面板「文件统计」卡 —— 图片专用形态：字数/行数无意义，改为显示像素尺寸。
+        /// 尺寸优先用图片页 <c>img.onload</c> 回报的**实际解码值**（<see cref="PanelState.ImageWidth"/>），
+        /// 未回报时回退到渲染前从文件头解析的结果（渐进式 JPEG / EXIF 旋转会让两者不一致）。
+        /// </summary>
+        private void RefreshImageStats(PanelState state, string path)
         {
             try
             {
-                var bytes = File.ReadAllBytes(path);
-                int count = 0;
-                for (int i = 0; i + 11 < bytes.Length; i++)
+                var w = state.ImageWidth;
+                var h = state.ImageHeight;
+                if (w <= 0 || h <= 0)
                 {
-                    if (bytes[i] == (byte)'/' && bytes[i + 1] == (byte)'T' && bytes[i + 2] == (byte)'y'
-                        && bytes[i + 3] == (byte)'p' && bytes[i + 4] == (byte)'e' && bytes[i + 5] == (byte)' '
-                        && bytes[i + 6] == (byte)'/' && bytes[i + 7] == (byte)'P' && bytes[i + 8] == (byte)'a'
-                        && bytes[i + 9] == (byte)'g' && bytes[i + 10] == (byte)'e' && bytes[i + 11] != (byte)'s')
-                        count++;
+                    // 尚未收到回报（页面刚导航/图片仍在解码）→ 用文件头解析值兜底
+                    if (TryReadImageDimensions(path, out var hw, out var hh)) { w = hw; h = hh; }
+                }
+                SetStats(w > 0 && h > 0 ? $"{w} × {h}" : "—", "—", "—", "像素尺寸");
+            }
+            catch (Exception ex) { LogErr("RefreshImageStats: " + ex.Message); }
+        }
+
+        /// <summary>
+        /// 粗略统计 PDF 页数：扫描文件中的 <c>/Type /Page</c>（排除 <c>/Type /Pages</c>）。
+        /// 对象流压缩的 PDF 可能低估，仅作估算（文本视图下无其他页数来源）。
+        ///
+        /// <para><b>流式扫描</b>：按 64KB 分块读，块间保留 16 字节重叠以防模式跨块断裂。
+        /// 以前用 <c>File.ReadAllBytes</c> 一次性读入 —— 一个 50MB 的扫描版 PDF 会凭空
+        /// 在内存里驻留 50MB（且上游 <c>RefreshStats</c> 已在后台线程调用，大文件时峰值更明显）。
+        /// 统计页数只需要顺序扫一遍字节，不需要保留内容。</para>
+        /// </summary>
+        private static int CountPdfPages(string path)
+        {
+            const int ChunkSize = 64 * 1024;
+            const int Overlap = 16;              // 模式长 12 字节，留余量跨块
+            var pattern = new byte[] { 0x2F, 0x54, 0x79, 0x70, 0x65, 0x20, 0x2F, 0x50, 0x61, 0x67, 0x65 }; // "/Type /Page"
+            try
+            {
+                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite,
+                                              ChunkSize, FileOptions.SequentialScan);
+                var buf = new byte[ChunkSize + Overlap];
+                int carry = 0;
+                long total = 0;
+                var count = 0;
+                int read;
+                while ((read = fs.Read(buf, carry, ChunkSize)) > 0)
+                {
+                    var avail = carry + read;
+                    // 末字节判断是否为 "/Pages"：只在交到下一块时才需要，这里保守地整体扫描，
+                    // 排除紧随 's' 的情况（与旧实现同口径）
+                    for (int i = 0; i + 11 < avail; i++)
+                    {
+                        if (buf[i] == pattern[0] && buf[i + 1] == pattern[1] && buf[i + 2] == pattern[2]
+                            && buf[i + 3] == pattern[3] && buf[i + 4] == pattern[4] && buf[i + 5] == pattern[5]
+                            && buf[i + 6] == pattern[6] && buf[i + 7] == pattern[7] && buf[i + 8] == pattern[8]
+                            && buf[i + 9] == pattern[9] && buf[i + 10] == pattern[10] && buf[i + 11] != (byte)'s')
+                            count++;
+                    }
+                    // 把尾部 Overlap 字节挪到块首，供下一块续接比对
+                    carry = Math.Min(Overlap, avail);
+                    Array.Copy(buf, avail - carry, buf, 0, carry);
+                    total += read;
                 }
                 return count;
             }
             catch { return 0; }
         }
 
-        /// <summary>写「文件统计」卡三个数值（跨线程安全）。</summary>
-        private void SetStats(string words, string lines, string pages)
+        /// <summary>
+        /// 写入统计卡三格。默认标签为「总字数 / 行数 / 页数」；图片等不适用该口径的内容
+        /// 可用 <paramref name="label0"/> 覆盖第一行标签（如「像素尺寸」）。
+        /// </summary>
+        private void SetStats(string words, string lines, string pages, string? label0 = null)
         {
             if (!Dispatcher.CheckAccess())
             {
-                Dispatcher.BeginInvoke(new Action(() => SetStats(words, lines, pages)));
+                Dispatcher.BeginInvoke(new Action(() => SetStats(words, lines, pages, label0)));
                 return;
             }
             try
             {
+                if (StatWordsLabel != null) StatWordsLabel.Text = label0 ?? "总字数";
                 if (StatWords != null) StatWords.Text = words;
                 if (StatLines != null) StatLines.Text = lines;
                 if (StatPages != null) StatPages.Text = pages;
@@ -606,12 +663,19 @@ namespace SeeMe
 
         private void OnHighlightsChanged()
         {
+            // 线程守门：HighlightStore 是应用级单例，Changed 回调最终会读 AnnSearchBox.Text（UI 对象）。
+            // 后面虽然用 BeginInvoke 派发刷新，但**读 Text 这一步本身**就已经跨线程了。
+            if (!Dispatcher.CheckAccess())
+            {
+                Dispatcher.BeginInvoke(new Action(OnHighlightsChanged));
+                return;
+            }
             try
             {
                 if (AnnPanel?.Visibility != Visibility.Visible) return;
                 Dispatcher.BeginInvoke(new Action(() => RefreshAnnList(AnnSearchBox?.Text ?? "")));
             }
-            catch { }
+            catch (Exception ex) { LogErr("OnHighlightsChanged: " + ex.Message); }
         }
 
         /// <summary>点击标注：在其原文件所在面板打开（当前文件即用所在面板），失败自动转左栏，并滚动+高亮跳到对应位置。</summary>

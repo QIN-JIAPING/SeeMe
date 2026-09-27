@@ -38,6 +38,12 @@ namespace SeeMe
             .UseAutoIdentifiers()
             .UseEmojiAndSmiley()
             .UseMathematics()  // KaTeX 数学公式支持（$$...$$ 与 $...$）
+            // 脚注：[^1] 引用 + 文末 [^1]: 定义 → <sup class="footnote-ref"> + <section class="footnotes">。
+            // ⚠️ UseAdvancedExtensions() 默认**不含**脚注（它含 Tables/TaskLists/EmphasisExtras/
+            // AutoIdentifiers 等，但不含 Footnotes），必须显式再加一次。
+            // 对应 CSS 早已就绪（见 BuildCss 里的 sup.footnote-ref / section.footnotes），
+            // 缺的只是这一行 —— 否则脚注语法被当作普通文本原样显示。
+            .UseFootnotes()
             .DisableHtml()
             .Build();
 

@@ -100,6 +100,15 @@ namespace SeeMe
         /// <summary>刷新最近文件列表（受搜索过滤影响；用虚拟化集合承载）。</summary>
         private void RefreshRecentFilesList()
         {
+            // 线程守门：本方法是**应用级单例** History/Bookmarks/Progress 的 Changed 回调，
+            // 谁在后台线程改一次集合就会直接写 UI 控件 → 跨线程访问异常。
+            // 目前所有调用链都在 UI 线程（实测），但那是「调用方恰好守规矩」，不是本方法的保证。
+            // 显式 CheckAccess 把它变成结构性保证（范例：MainWindow.Panels.cs 的 SetStats）。
+            if (!Dispatcher.CheckAccess())
+            {
+                Dispatcher.BeginInvoke(new Action(RefreshRecentFilesList));
+                return;
+            }
             try
             {
                 var source = _app.History.Entries;
@@ -237,13 +246,16 @@ namespace SeeMe
                     _searchDebounce.Tick += (_, _) =>
                     {
                         _searchDebounce.Stop();
-                        try { RefreshRecentFilesList(); } catch { }
+                        // 刷新失败不该中断后续输入（防抖计时器是一次性的，抛出去会让列表再也不刷新），
+                        // 但也不能像以前那样完全静默 —— 落一条日志，便于定位「搜索框没反应」类问题。
+                        try { RefreshRecentFilesList(); }
+                        catch (Exception ex) { LogErr("Search debounce refresh: " + ex.Message); }
                     };
                 }
                 _searchDebounce.Stop();
                 _searchDebounce.Start();
             }
-            catch { }
+            catch (Exception ex) { LogErr("OnSearchFilter: " + ex.Message); }
         }
 
         /// <summary>Windows 新建文件默认名过长（新建 Microsoft Word 文档…），显示时缩短为通用称呼，hover 显示全名。</summary>

@@ -1065,7 +1065,7 @@
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Text="总字数" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"
+                                <TextBlock Text="总字数" x:Name="StatWordsLabel" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"
                                            VerticalAlignment="Center"/>
                                 <TextBlock Grid.Column="1" x:Name="StatWords" Text="—" FontSize="11"
                                            Foreground="{DynamicResource TextBodyBrush}" VerticalAlignment="Center"/>
@@ -1076,7 +1076,7 @@
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Text="行数" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"
+                                <TextBlock Text="行数" x:Name="StatLinesLabel" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"
                                            VerticalAlignment="Center"/>
                                 <TextBlock Grid.Column="1" x:Name="StatLines" Text="—" FontSize="11"
                                            Foreground="{DynamicResource TextBodyBrush}" VerticalAlignment="Center"/>
@@ -1087,7 +1087,7 @@
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Text="页数" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"
+                                <TextBlock Text="页数" x:Name="StatPagesLabel" FontSize="10" Foreground="{DynamicResource TextSecondaryBrush}"
                                            VerticalAlignment="Center"/>
                                 <TextBlock Grid.Column="1" x:Name="StatPages" Text="—" FontSize="11"
                                            Foreground="{DynamicResource TextBodyBrush}" VerticalAlignment="Center"/>

@@ -34,6 +34,19 @@ namespace SeeMe
         private ReadProgressStore _progress = null!;
         /// <summary>独立命令面板窗口（不挂在主窗内，避免遮住阅读区）。</summary>
         private CommandPaletteWindow? _paletteWindow;
+
+        // ── 应用级单例事件的订阅句柄 ──
+        // 上面 6 个 Store / 主题管理器都是**进程级单例**（App.GlobalTheme / *.Load()），多窗口共享。
+        // 若订阅时不保留委托引用，OnClosed 里就无法 -=（lambda / 方法组每次都会新建委托实例，
+        // 用等价的表达式写两次也退不掉）→ 关闭的窗口被单例强引用**永久无法 GC**，
+        // 且单例一变化就把回调打到已关闭窗口的控件上（跨窗口状态错乱）。
+        // 因此这里显式持有委托字段，OnClosed 对称退订。**改这两个方法时必须成对修改。**
+        private Action? _onThemeChanged;
+        private Action? _onHistoryChanged;
+        private Action? _onBookmarksChanged;
+        private Action? _onHighlightsChanged;
+        private Action? _onNotesChanged;
+        private Action? _onProgressChanged;
         private string _searchFilter = "";
         /// <summary>用户自定义 CSS 文件路径（null=未启用）。读取失败时回退空。</summary>
         private string? _customCssPath;
@@ -109,6 +122,10 @@ namespace SeeMe
         {
             try
             {
+                // 退订应用级单例事件。**必须放在最前**：CleanupPanel 会 Dispose 面板 WebView，
+                // 退订之前任何一次单例变更（如另一窗口保存了书签）触发回调，都会打到已 Dispose 的控件上。
+                // 与 OnLoaded 里的订阅成对，**改一处必须改另一处**。
+                UnsubscribeGlobalEvents();
                 SaveWindowState();
                 SaveAllReadProgress();   // 必须在 CleanupPanel 之前：Dispose 后滚动数据失效
                 CleanupPanel(_app.Left);
@@ -119,6 +136,26 @@ namespace SeeMe
             }
             catch (Exception ex) { LogErr("OnClosed cleanup: " + ex.Message); }
             base.OnClosed(e);
+        }
+
+        /// <summary>
+        /// 退订 OnLoaded 里挂上的 6 个应用级单例事件。单项失败不影响其余（用 try 包住每个 -=，
+        /// 避免一个异常让后面的订阅全部泄漏）。整体幂等：未订阅过时 -= 是安全空操作。
+        /// </summary>
+        private void UnsubscribeGlobalEvents()
+        {
+            TryUnsubscribe(() => { if (_onThemeChanged != null) _theme.Changed -= _onThemeChanged; }, "theme");
+            TryUnsubscribe(() => { if (_onHistoryChanged != null && _app?.History != null) _app.History.Changed -= _onHistoryChanged; }, "history");
+            TryUnsubscribe(() => { if (_onBookmarksChanged != null && _bookmarks != null) _bookmarks.Changed -= _onBookmarksChanged; }, "bookmarks");
+            TryUnsubscribe(() => { if (_onHighlightsChanged != null && _highlights != null) _highlights.Changed -= _onHighlightsChanged; }, "highlights");
+            TryUnsubscribe(() => { if (_onNotesChanged != null && _notes != null) _notes.Changed -= _onNotesChanged; }, "notes");
+            TryUnsubscribe(() => { if (_onProgressChanged != null && _progress != null) _progress.Changed -= _onProgressChanged; }, "progress");
+        }
+
+        private void TryUnsubscribe(Action unsubscribe, string what)
+        {
+            try { unsubscribe(); }
+            catch (Exception ex) { LogErr("Unsubscribe " + what + ": " + ex.Message); }
         }
 
         private static string WindowStatePath => StoragePaths.Combine("window.json");
@@ -228,6 +265,13 @@ namespace SeeMe
 
         private void OnThemeChanged()
         {
+            // 线程守门：本方法是 App.GlobalTheme 单例事件的回调，会改按钮图标/提示（UI 对象）。
+            // 主题切换目前都由 UI 线程发起，但 OnThemeChanged 也可能被其他窗口/未来代码触发。
+            if (!Dispatcher.CheckAccess())
+            {
+                Dispatcher.BeginInvoke(new Action(OnThemeChanged));
+                return;
+            }
             UpdateThemeButton();
             try
             {
@@ -321,9 +365,14 @@ namespace SeeMe
         /// <summary>
         /// 导出当前活动面板为 PDF：注入 TOC / 页码 / 水印相关 CSS class 到页面 body，
         /// 调 WebView2.PrintToPdfAsync 静默输出，完成后移除注入样式（恢复浏览状态）。
-        /// 失败抛异常由调用方提示。
+        ///
+        /// <para><b>返回 Task 而不是 async void</b>：调用方（SettingsDialog 的导出按钮）需要
+        /// 用 try/catch 明确报告失败。async void 的异常**不会**回到调用方 ——
+        /// 首个 await 之后抛出的异常会被 post 到同步上下文，只能靠 DispatcherUnhandledException 兜底，
+        /// 表现为「弹出导出完成、实际没生成文件」或直接崩。改成 Task 后，
+        /// <c>await</c> 能把异常精确地交回调用方。这是 async void 的教科书式误用。</para>
         /// </summary>
-        public async void ExportActivePanelToPdf(string filePath, bool includeToc, bool showPageNumber, bool enableWatermark, string watermarkText)
+        public async Task ExportActivePanelToPdf(string filePath, bool includeToc, bool showPageNumber, bool enableWatermark, string watermarkText)
         {
             var panel = _activePanel ?? _app?.Left;
             var wb = panel?.WebView?.CoreWebView2;
@@ -474,29 +523,36 @@ namespace SeeMe
             _render.ThemeManager = _theme;
             _converter = new FileConverter();
             _render.Converter = _converter;
-            _theme.Changed += OnThemeChanged;
+            // 事件订阅统一走字段级委托（而非方法组直接 +=），否则 OnClosed 无法退订 —— 见字段声明处注释
+            _onThemeChanged = OnThemeChanged;
+            _theme.Changed += _onThemeChanged;
 
             _pandoc = new PandocExportService();
             _pandoc.LoadSettings();
 
             _app.History = FileHistory.Load();
             _app.History.SetMaxEntries(AppSettings.Get(AppSettings.HistorySizeKey, 15));
-            _app.History.Changed += RefreshRecentFilesList;
+            _onHistoryChanged = RefreshRecentFilesList;
+            _app.History.Changed += _onHistoryChanged;
 
             _bookmarks = BookmarkStore.Load();
-            _bookmarks.Changed += RefreshRecentFilesList;
+            _onBookmarksChanged = RefreshRecentFilesList;
+            _bookmarks.Changed += _onBookmarksChanged;
 
             _highlights = HighlightStore.Load();
-            _highlights.Changed += OnHighlightsChanged;
+            _onHighlightsChanged = OnHighlightsChanged;
+            _highlights.Changed += _onHighlightsChanged;
             _render.HighlightStore = _highlights;
 
             _notes = NoteStore.Load();
-            _notes.Changed += RefreshNotesPanel;
+            _onNotesChanged = RefreshNotesPanel;
+            _notes.Changed += _onNotesChanged;
 
             // 阅读进度：跨会话持久化滚动位置与百分比（内存态的 PanelState.LastScrollY 只活一次运行）
             _progress = ReadProgressStore.Load();
             _progress.PruneMissing();   // 启动清一次僵尸条目（用户删掉的文档不该留在进度表里）
-            _progress.Changed += RefreshRecentFilesList;
+            _onProgressChanged = RefreshRecentFilesList;
+            _progress.Changed += _onProgressChanged;
 
             // 先设置 WebView 默认背景避免闪白（跟随主题画布色）
             var initBg = ThemeWebViewBg(_theme.Current == _theme.Dark);
@@ -505,13 +561,14 @@ namespace SeeMe
 
             try
             {
-                // 显式指定 UserDataFolder（StoragePaths.Root\WebView2Data）：
+                // 显式指定 UserDataFolder（StoragePaths.WebView2DataDir）：
                 // 1) 安装到 Program Files 等只读目录时不再依赖 exe 旁的默认数据目录（SeeMe.exe.WebView2，不可写）；
                 // 2) 缓存位置确定，便于定期清理；设置/历史/书签等同根下的 *.json 不受影响；
                 // 3) 便携模式下随之落到 data\WebView2Data，整个数据树随程序目录一起搬迁。
                 // ⚠️ 便携模式装在 Program Files 时 WebView2 会因写不进去而初始化失败 ——
                 // 该场景由设置页的可写性探测提前警告（见 StoragePaths.ProbePortableWritable）。
-                var webviewDataDir = Path.Combine(StoragePaths.Root, "WebView2Data");
+                // ⚠️ 路径必须走 StoragePaths（设置页的缓存统计/清理引用同一属性），不要在此写裸字符串。
+                var webviewDataDir = StoragePaths.WebView2DataDir;
                 var env = await CoreWebView2Environment.CreateAsync(null, webviewDataDir);
                 await WebViewL.EnsureCoreWebView2Async(env);
                 await WebViewR.EnsureCoreWebView2Async(env);

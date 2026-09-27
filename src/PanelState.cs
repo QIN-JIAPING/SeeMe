@@ -65,6 +65,13 @@ namespace SeeMe
         // 远程图片授权：true=允许本面板加载文档中的远程图片（CSP img-src 放行 https:）
         // 由 MainWindow 在渲染前按 AppSettings 持久化授权 + 用户确认结果写入
         public bool AllowRemoteImages;
+        /// <summary>
+        /// 图片查看页回报的**实际解码尺寸**（前端 &lt;img&gt; load 事件上报的 naturalWidth/naturalHeight）。
+        /// 与渲染时从文件头解析的尺寸可能不同（渐进式 JPEG、EXIF 旋转移正、容器尺寸与实际不符等），
+        /// 因此这里以实际值为准，供统计卡显示。0 = 未回报（非图片 / 已切换文件）。
+        /// </summary>
+        public int ImageWidth;
+        public int ImageHeight;
         public TextBlock TitleText { get; }
         public TextBlock PathText { get; }
         public WebView2 WebView { get; }

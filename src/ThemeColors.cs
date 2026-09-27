@@ -21,7 +21,14 @@ namespace SeeMe
             public static readonly Color AccentLight     = Color.FromRgb(0xEE, 0xF0, 0xFF);
             public static readonly Color Heading         = Color.FromRgb(0x1E, 0x1B, 0x4B);
             public static readonly Color Text            = Color.FromRgb(0x33, 0x41, 0x55);
-            public static readonly Color Secondary       = Color.FromRgb(0x94, 0xA3, 0xB8);
+            // 🔴 0x57667A 而非 0x94A3B8：次要文字是**小字号**（状态栏 11px、按钮 10px、脚注 .85em），
+            //    旧值在浅色底上对比度只有 2.34:1(--bg) / 2.56:1(--card)，远低于 WCAG AA
+            //    对小字要求的 4.5:1 —— 表现就是「灰得发虚、看着模糊」，实际是**对比度不足**而非抗锯齿问题。
+            //    本值对**全部 8 个容器底色**都达标，最差是选中态 ItemSelected(#E0E3FF) 的 4.63:1
+            //    （4.30 的 ItemSelected 是最紧的一处，选浅一档就会在这里破线）。
+            //    它仍是「比正文浅一档的冷灰」，层级关系不变。**改动前请先跑 ThemeContrastTests，不要靠肉眼调灰**。
+            //    深色主题的 0x94A3B8 在 #0F131A 上有 7.26:1，是合格的，故两边取值不同（有意）。
+            public static readonly Color Secondary       = Color.FromRgb(0x57, 0x66, 0x7A);
             public static readonly Color IconFg          = Color.FromRgb(0x64, 0x74, 0x8B);
             public static readonly Color DarkBtn         = Color.FromRgb(0x1E, 0x1B, 0x4B);
             public static readonly Color LightGray       = Color.FromRgb(0xE2, 0xE8, 0xF0);
@@ -180,7 +187,9 @@ namespace SeeMe
             ("--card",       "#FFFFFF", "#1C232E"),
             ("--text",       "#334155", "#CBD5E1"),
             ("--heading",    "#1E1B4B", "#F1F5F9"),
-            ("--secondary",  "#94A3B8", "#94A3B8"),
+            // 浅色侧必须与 Light.Secondary 保持一致（两边同改，否则 WPF 壳与 WebView 内容深浅不一）；
+            // 深色侧 #94A3B8 在 #0F131A 上有 7.26:1，达标，保持不变。
+            ("--secondary",  "#57667A", "#94A3B8"),
             ("--border",     "#E2E8F0", "#333B48"),
             ("--accent",     "#6366F1", "#818CF8"),
             ("--h1-border",  "#1E1B4B", "#CBD5E1"),
@@ -188,7 +197,8 @@ namespace SeeMe
             ("--link",       "#6366F1", "#818CF8"),
             ("--quote",      "#6366F1", "#818CF8"),
             ("--quote-bg",   "#EEF0FF", "#1E1B4B"),
-            ("--quote-text", "#94A3B8", "#94A3B8"),
+            // 引用块文字同样是小字号说明性文字，浅色侧跟着 --secondary 一起加深（旧值与它同值 #94A3B8）。
+            ("--quote-text", "#57667A", "#94A3B8"),
             ("--code-bg",    "#F1F5F9", "#333B48"),
             ("--pre-bg",     "#1E1B4B", "#161B24"),
             ("--pre-text",   "#E2E8F0", "#E2E8F0"),

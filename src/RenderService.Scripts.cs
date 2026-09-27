@@ -267,7 +267,9 @@ window.__seemeSearchPrev=function(){
       img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgText);
     });
   }
-  window.__seemeExportChart = function(kind, index, fmt){
+  // tok 是宿主每次导出请求生成的会话令牌，原样回传 → 宿主据此丢弃过期/伪造的回传。
+  // 不校验它的话，页面上任何 postMessage 都能顶替用户选中的那次导出。
+  window.__seemeExportChart = function(kind, index, fmt, tok){
     try{
       var list = collect(kind);
       if(!list.length) return post({kind:'chart-export-error',msg:'未找到可导出的图表'});
@@ -277,13 +279,13 @@ window.__seemeSearchPrev=function(){
         if(!el.__seemeChart) return post({kind:'chart-export-error',msg:'图表尚未渲染完成'});
         // ECharts 官方接口，默认 canvas renderer → 只能出 PNG
         var url = el.__seemeChart.getDataURL({type:'png', pixelRatio:2, backgroundColor:null});
-        return post({kind:'chart-export', format:'png', data:url, index:index, chartKind:kind});
+        return post({kind:'chart-export', token:tok, format:'png', data:url, index:index, chartKind:kind});
       }
       var svg = svgOf(el);
       if(!svg) return post({kind:'chart-export-error',msg:'该图表尚未生成 SVG'});
-      if(fmt==='svg') return post({kind:'chart-export', format:'svg', data:svg, index:index, chartKind:kind});
+      if(fmt==='svg') return post({kind:'chart-export', token:tok, format:'svg', data:svg, index:index, chartKind:kind});
       svgToPng(svg, 2).then(function(dataUrl){
-        post({kind:'chart-export', format:'png', data:dataUrl, index:index, chartKind:kind});
+        post({kind:'chart-export', token:tok, format:'png', data:dataUrl, index:index, chartKind:kind});
       }).catch(function(e){
         post({kind:'chart-export-error',msg:'PNG 转换失败（该图可能引用外部资源），请改导出 SVG：' + e});
       });

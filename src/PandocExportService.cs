@@ -206,7 +206,6 @@ namespace SeeMe
                 psi.ArgumentList.Add(format);
                 psi.ArgumentList.Add("--wrap=none");
 
-                var tcs = new TaskCompletionSource<(int, string, string)>();
                 using var proc = new Process { StartInfo = psi };
 
                 proc.Start();

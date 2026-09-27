@@ -12,7 +12,10 @@
         <SolidColorBrush x:Key="AccentLightBrush"          Color="#EEF0FF"/>
         <SolidColorBrush x:Key="TextPrimaryBrush"          Color="#1E1B4B"/>
         <SolidColorBrush x:Key="TextBodyBrush"             Color="#334155"/>
-        <SolidColorBrush x:Key="TextSecondaryBrush"        Color="#94A3B8"/>
+        <!-- 次要文字（状态栏提示 / 小号按钮 / 说明文字）。⚠️ 必须与 ThemeColors.Light.Secondary 一致：
+             它是 ThemeManager 应用主题**之前**的兜底值，不同步会在启动瞬间闪一下更浅的灰。
+             旧值 #94A3B8 在浅色底上只有 2.3:1 对比度（小字模糊的主因），见 ThemeColors.cs 处的说明。 -->
+        <SolidColorBrush x:Key="TextSecondaryBrush"        Color="#57667A"/>
         <SolidColorBrush x:Key="IconForegroundBrush"       Color="#64748B"/>
         <SolidColorBrush x:Key="DarkBtnBrush"              Color="#1E1B4B"/>
         <SolidColorBrush x:Key="LightGrayBrush"            Color="#E2E8F0"/>

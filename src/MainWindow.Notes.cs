@@ -150,6 +150,13 @@ namespace SeeMe
         /// <summary>按当前面板文件重建列表：先列高亮标注（只读+可删），再列用户笔记（可编辑/删除）。</summary>
         private void RefreshNotesPanel()
         {
+            // 线程守门：本方法是应用级单例 NoteStore.Changed 的回调（OnWebMessage 之外的路径也可能触发）。
+            // 直接写 NotesList/NotesCountText 等控件，后台线程调用会抛跨线程访问异常。
+            if (!Dispatcher.CheckAccess())
+            {
+                Dispatcher.BeginInvoke(new Action(RefreshNotesPanel));
+                return;
+            }
             if (NotesPanel == null || _notes == null) return;
             NotesList.Items.Clear();
             var st = ActiveFileState();

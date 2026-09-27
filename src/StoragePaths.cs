@@ -69,6 +69,21 @@ namespace SeeMe
         /// <summary>缓存目录（<c>Root\cache</c>，PDF 文本层等）。</summary>
         public static string CacheDir => Path.Combine(Root, "cache");
 
+        /// <summary>
+        /// WebView2 用户数据目录（<c>Root\WebView2Data</c>）。
+        ///
+        /// <para><b>为什么必须在这里定义</b>：WebView2 默认会在 exe 旁建
+        /// <c>&lt;exe&gt;.WebView2</c> 目录，那既不符合"数据都进 Root"的约定，
+        /// 也装不进 Program Files（只读）。项目在 <c>MainWindow.OnLoaded</c> 里
+        /// 显式指定了本目录，而设置页的"缓存大小 / 清空缓存"曾**各自硬编码 exe 旁的旧路径**
+        /// → 显示的是不存在的目录、清理清的是空的，真实缓存（可达数百 MB）从未被清掉。
+        /// 收敛到这里之后，两处引用同一来源，不会再漂移。</para>
+        /// </summary>
+        public const string WebView2DataDirName = "WebView2Data";
+
+        /// <summary>WebView2 用户数据目录的绝对路径（见 <see cref="WebView2DataDirName"/>）。</summary>
+        public static string WebView2DataDir => Path.Combine(Root, WebView2DataDirName);
+
         /// <summary>把数据根的相对名解析为绝对路径（如 <c>settings.json</c> → <c>Root\settings.json</c>）。</summary>
         public static string Combine(string relative) => Path.Combine(Root, relative);
 
