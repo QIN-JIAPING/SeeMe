@@ -134,6 +134,7 @@ namespace SeeMe
             // ── 文档 ──
             _all.Add(Mk("文档", "打印当前文档", "Ctrl+P", () => o.PrintActivePanelPublic()));
             _all.Add(Mk("文档", "导出当前预览为图片 PNG", "", () => o.ExportActiveToImage()));
+            _all.Add(Mk("文档", "导出整篇为长图 PNG", "", () => o.ExportActiveToLongImage()));
             if (p?.CurrentFile != null)
                 _all.Add(Mk("文档", "导出为 Markdown / Word…", "", () => o.ShowExportDialogForActive()));
             // ── 最近文件（最多 10）──

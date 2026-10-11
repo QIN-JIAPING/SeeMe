@@ -25,6 +25,10 @@ namespace SeeMe
             new("epub",     ".epub", "电子书",           "电子书 (*.epub)|*.epub"),
             new("markdown", ".md",   "Markdown",         "Markdown 文件 (*.md)|*.md"),
             new("rst",      ".rst",  "reStructuredText", "reStructuredText (*.rst)|*.rst", ShowInDialog: false),
+            // 自包含 HTML：**见 SeeMe 自己的格式名**，pandoc 侧仍导出 html，额外要求把图片/CSS 内嵌进单文件
+            // （见 PandocExportService 的别名映射）。放在末尾是为了不动上面各条在 All 中的既有下标 ——
+            // FromFormat 用的是位置索引，插在中间会静默指错条目。
+            new("html-self-contained", ".html", "HTML 单文件（内嵌图片）", "HTML 单文件 (*.html)|*.html"),
         };
 
         /// <summary>对话框网格展示的格式（顺序即展示顺序）。</summary>
@@ -42,6 +46,7 @@ namespace SeeMe
             "epub" => All[4],
             "markdown" or "md" => All[5],
             "rst" => All[6],
+            "html-self-contained" or "html-single" => All[7],
             _ => null,
         };
 
@@ -54,5 +59,11 @@ namespace SeeMe
 
         /// <summary>白名单校验（防 format 注入额外 pandoc 参数）。</summary>
         public static bool IsAllowed(string? format) => FromFormat(format) != null;
+
+        /// <summary>
+        /// 自包含 HTML 的格式名。它**不是 pandoc 的格式名**，而是 SeeMe 的别名：
+        /// 调 pandoc 时仍用 <c>html</c>，另加内嵌资源的开关。集中在这里避免魔法字符串散落。
+        /// </summary>
+        public const string SelfContainedHtmlFormat = "html-self-contained";
     }
 }

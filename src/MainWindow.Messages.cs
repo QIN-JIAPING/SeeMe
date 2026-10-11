@@ -124,6 +124,16 @@ namespace SeeMe
                     SaveEdit(state, textEl.GetString() ?? "");
                     return;
                 }
+                else if (kind == "edit-paste-image")
+                {
+                    // 编辑页粘贴图片：页面只回传 data URL（它没有文件系统权限，也不该有），
+                    // 落盘到文档同级的 assets\ 并回插相对路径由宿主完成。
+                    // 载荷校验（MIME 白名单 / base64 / 大小上限）在 PastedImageCodec 内，不在此处。
+                    var imgName = root.TryGetProperty("name", out var nEl) ? nEl.GetString() : null;
+                    var imgData = root.TryGetProperty("dataUrl", out var dEl) ? dEl.GetString() : null;
+                    _ = HandlePastedImageAsync(state, imgName, imgData);
+                    return;
+                }
                 else if (kind == "anydoc-result" && root.TryGetProperty("id", out var anyIdEl))
                 {
                     // anydoc-wasm 转换结果回传：令牌 + 源文件双重校验，过期/跨文件/伪造消息一律忽略

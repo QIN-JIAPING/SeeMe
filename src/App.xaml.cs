@@ -3,6 +3,7 @@
 
 using System;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using System.Windows;
@@ -26,6 +27,28 @@ namespace SeeMe
             base.OnStartup(e);
             // 崩溃日志必须最先注册：越早越能覆盖启动阶段的异常。
             RegisterCrashLogging();
+
+            var file = e.Args.Length > 0 && File.Exists(e.Args[0]) ? e.Args[0] : null;
+
+            // ── 单实例 + 文件接力 ──────────────────────────────────────────────
+            // 必须排在 InitTray / 主题 / 更新检查之前：次级实例转发成功后要立刻退出，
+            // 若先建了托盘图标会「闪一下再消失」。
+            //
+            // 关闭单实例时整段跳过 —— 用户显式选择多进程（例如要多开几个独立窗口对比）。
+            // 转发失败（首实例恰在退出）时不退出，继续按普通启动走，避免「双击了却什么都没打开」。
+            if (AppSettings.Get(AppSettings.SingleInstanceKey, true))
+            {
+                if (SingleInstance.TryAcquire())
+                {
+                    SingleInstance.StartServer(OnRelayedFile);
+                }
+                else if (SingleInstance.RelayToExisting(file))
+                {
+                    Shutdown();
+                    return;
+                }
+            }
+
             InitSentry();
             InitAutoUpdate();
             // 应用级单例主题：所有窗口共享同一 ThemeManager，任一窗口切换主题，
@@ -38,8 +61,60 @@ namespace SeeMe
             // 清理过期的 PDF 文本层缓存（防磁盘无限增长 + 残留敏感 PDF 明文）
             try { PdfTextCache.CleanupExpired(); } catch { }
 
-            var file = e.Args.Length > 0 && File.Exists(e.Args[0]) ? e.Args[0] : null;
             CreateWindow(file);
+        }
+
+        /// <summary>
+        /// 首实例收到次级实例转发的文件路径。
+        ///
+        /// <para><b>回调来自后台线程</b>（<see cref="SingleInstance.StartServer"/> 的管道循环），
+        /// 故一切窗口操作都必须先切到 UI 线程。</para>
+        ///
+        /// <para><b>默认开新窗口而不是顶掉当前文档</b>：用户可能正在读一份文档时又双击了另一个文件，
+        /// 替换内容会直接丢失阅读上下文。可在设置里改为「当前窗口」。</para>
+        /// </summary>
+        private void OnRelayedFile(string? path)
+        {
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    if (string.IsNullOrEmpty(path))
+                    {
+                        ShowMainWindow();   // 空路径 = 只把已有窗口唤到前台
+                        return;
+                    }
+
+                    var mode = AppSettings.Get(AppSettings.RelayOpenModeKey, "window");
+
+                    // 接力路径来自**进程外**（命名管道）。即便来源已通过身份校验，
+                    // 也先在 IPC 边界做一次准入判定：类型根本不支持就不必开窗再报错。
+                    // 内容不符（ContentMismatch）刻意不在这里拦 —— 那要留给 OpenFileInternal
+                    // 询问用户，提前拦会变成"静默丢弃"，用户看不出发生了什么。
+                    if (FileAdmission.Check(path) == FileAdmission.Verdict.Unsupported)
+                    {
+                        SeeMeLog.Warn("Relay rejected (unsupported)", path!);
+                        return;
+                    }
+
+                    if (mode == "current")
+                    {
+                        // 只投递给装配完成的窗口（OnLoaded 未跑完时 _app 尚为 null）
+                        var t = Windows.OfType<MainWindow>().FirstOrDefault(w => w.IsActive && w.IsReady)
+                                ?? Windows.OfType<MainWindow>().FirstOrDefault(w => w.IsReady);
+                        if (t != null)
+                        {
+                            t.Show();
+                            if (t.WindowState == WindowState.Minimized) t.WindowState = WindowState.Normal;
+                            t.Activate();
+                            t.OpenFileIntoActive(path!);
+                            return;
+                        }
+                    }
+                    CreateWindow(path);
+                }
+                catch (Exception ex) { SeeMeLog.Error("SingleInstance relay open", ex); }
+            }));
         }
 
         /// <summary>
@@ -143,6 +218,8 @@ namespace SeeMe
 
         protected override void OnExit(ExitEventArgs e)
         {
+            // 先停管道服务并释放互斥体：否则下一个启动的实例会以为「首实例还在」而转发到一个死管道。
+            SingleInstance.Shutdown();
             DisposeTray();
             base.OnExit(e);
         }
@@ -214,6 +291,10 @@ namespace SeeMe
         {
             _windowCount++;
             var win = new MainWindow();
+            // 接力来的文件必须先登记到窗口上：OnLoaded 在 Show() 之后异步执行，
+            // 而它读的是 *本进程* 的 Environment.GetCommandLineArgs() —— 对首实例而言
+            // 那是它自己当初的命令行，接力文件根本不在其中。
+            if (!string.IsNullOrEmpty(filePath)) win.PendingOpenPath = filePath;
             win.Closed += (_, _) =>
             {
                 _windowCount--;

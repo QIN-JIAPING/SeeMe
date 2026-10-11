@@ -3,8 +3,10 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 
@@ -66,6 +68,8 @@ namespace SeeMe
                 var autoOn = AppSettings.Get(AppSettings.AutoSaveKey, true);
                 var autoDelay = AppSettings.Get(AppSettings.AutoSaveDelayKey, 10);
                 AutoSaveBehaviorBox.SelectedIndex = !autoOn ? 0 : autoDelay switch { 5 => 1, 30 => 3, _ => 2 };
+                SingleInstanceBox.SelectedIndex = AppSettings.Get(AppSettings.SingleInstanceKey, true) ? 0 : 1;
+                RelayOpenModeBox.SelectedIndex = AppSettings.Get(AppSettings.RelayOpenModeKey, "window") == "current" ? 1 : 0;
 
                 // 外观
                 var mode = AppSettings.Get(AppSettings.ThemeModeKey, "light");
@@ -115,7 +119,10 @@ namespace SeeMe
                 var ver = typeof(SettingsDialog).Assembly.GetName().Version;
                 AboutVersion.Text = "SeeMe " + (ver?.ToString(3) ?? "1.0.1") + " · 多格式文档查看器";
                 RefreshCacheInfo();
+                RefreshSearchIndexInfo();
+                FillAssocGroups();
                 RefreshAssocStatus();
+                RefreshDiagnostics();
             }
             catch (Exception ex)
             {
@@ -127,24 +134,96 @@ namespace SeeMe
             }
         }
 
+        /// <summary>
+        /// 生成快捷键列表：每条命令一行「分类 · 命令名 ……… 当前手势」。
+        ///
+        /// <para><b>列表来自 <see cref="ShortcutRegistry.All"/>，不再是写死的字符串数组</b> ——
+        /// 旧实现硬编码 9 条文本，与 <c>OnWindowKeyDown</c> 里的实际分支各写各的，
+        /// 一旦不一致就会"设置页说的和程序做的不一样"。现在四处（列表 / 分派 / 默认值 / 存储）
+        /// 共用同一张命令表。已自定义的条目用强调色 + 半粗体标出。</para>
+        /// </summary>
         private void FillKeymap()
         {
+            if (KeymapList == null) return;
             KeymapList.Items.Clear();
+
             var fg = TryFindResource("TextBodyBrush") as System.Windows.Media.Brush ?? System.Windows.Media.Brushes.Gray;
-            string[] items =
+            var sec = TryFindResource("TextSecondaryBrush") as System.Windows.Media.Brush ?? System.Windows.Media.Brushes.Gray;
+            var accent = TryFindResource("AccentBrush") as System.Windows.Media.Brush ?? System.Windows.Media.Brushes.SteelBlue;
+
+            foreach (var cmd in ShortcutRegistry.All)
             {
-                "Ctrl+O            打开文件",
-                "Ctrl+T            切换双栏",
-                "Ctrl+F            查找",
-                "F5                刷新",
-                "Ctrl+0            缩放复位",
-                "Ctrl+= / Ctrl+-   放大 / 缩小",
-                "Ctrl+Shift+D      切换主题",
-                "Ctrl+N            新建窗口",
-                "Ctrl+W            关闭窗口",
-            };
-            foreach (var it in items)
-                KeymapList.Items.Add(new ListBoxItem { Content = new TextBlock { Text = it, FontSize = 12, Foreground = fg, Margin = new Thickness(0, 2, 0, 2) } });
+                var gesture = ShortcutRegistry.GetGesture(cmd.Id);
+                var isCustom = gesture != cmd.DefaultGesture;
+
+                var grid = new Grid { Margin = new Thickness(0, 3, 0, 3) };
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                var label = new TextBlock
+                {
+                    Text = cmd.Category + " · " + cmd.Label,
+                    FontSize = 12,
+                    Foreground = fg,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                Grid.SetColumn(label, 0);
+                grid.Children.Add(label);
+
+                var gestureText = new TextBlock
+                {
+                    Text = string.IsNullOrEmpty(gesture) ? "未绑定" : ShortcutRegistry.ToDisplay(gesture),
+                    FontSize = 12,
+                    FontWeight = isCustom ? FontWeights.SemiBold : FontWeights.Normal,
+                    Foreground = isCustom ? accent : sec,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(12, 0, 0, 0),
+                };
+                Grid.SetColumn(gestureText, 1);
+                grid.Children.Add(gestureText);
+
+                KeymapList.Items.Add(new ListBoxItem
+                {
+                    Content = grid,
+                    Tag = cmd.Id,
+                    Padding = new Thickness(4, 2, 4, 2),
+                    ToolTip = isCustom
+                        ? "已自定义（默认 " + ShortcutRegistry.ToDisplay(cmd.DefaultGesture) + "）"
+                        : "当前为默认值",
+                });
+            }
+        }
+
+        private void OnKeymapEdit(object sender, RoutedEventArgs e) => EditSelectedShortcut();
+
+        private void OnKeymapDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
+            => EditSelectedShortcut();
+
+        /// <summary>为列表中选中的命令打开录入窗口并落盘。</summary>
+        private void EditSelectedShortcut()
+        {
+            if (KeymapList?.SelectedItem is not ListBoxItem { Tag: string id }) return;
+            var cmd = ShortcutRegistry.Find(id);
+            if (cmd == null) return;
+
+            var dlg = new ShortcutCaptureWindow(cmd, ShortcutRegistry.GetGesture(id)) { Owner = this };
+            if (dlg.ShowDialog() != true) return;
+
+            // 空串 = 用户点了「清除绑定」→ 存哨兵值（与"恢复默认"语义不同，见 ShortcutRegistry）。
+            ShortcutRegistry.SetGesture(id,
+                string.IsNullOrEmpty(dlg.ResultGesture) ? ShortcutRegistry.UnboundMarker : dlg.ResultGesture);
+
+            FillKeymap();
+            KeymapHint.Text = string.IsNullOrEmpty(dlg.ResultGesture)
+                ? "已取消「" + cmd.Label + "」的快捷键绑定"
+                : "「" + cmd.Label + "」→ " + ShortcutRegistry.ToDisplay(dlg.ResultGesture);
+        }
+
+        private void OnKeymapResetAll(object sender, RoutedEventArgs e)
+        {
+            ShortcutRegistry.ResetAll();
+            FillKeymap();
+            KeymapHint.Text = "已恢复全部默认快捷键";
         }
 
         // ──────────────── 通用 ────────────────
@@ -362,6 +441,107 @@ namespace SeeMe
 
         private void StatusBarHint(string msg) => SeeMeLog.Info(msg);
 
+        // ──────────────── 诊断 ────────────────
+
+        /// <summary>
+        /// 刷新诊断区块：把日志目录（<see cref="StoragePaths.LogsDir"/>）显示出来。
+        ///
+        /// <para><b>为什么需要这一块</b>：日志是全项目唯一的排障入口，但此前**没有任何界面**
+        /// 告诉用户它在哪里 —— 用户报障时开发者只能远程猜路径，或让用户手打
+        /// <c>%LOCALAPPDATA%\SeeMe\logs</c>。这里把"路径 + 目录入口 + 一键复制"集中起来。</para>
+        /// </summary>
+        private void RefreshDiagnostics()
+        {
+            if (LogDirBox == null) return;
+            LogDirBox.Text = StoragePaths.LogsDir;
+        }
+
+        private void OnOpenLogDir(object sender, RoutedEventArgs e) => OpenDirectory(StoragePaths.LogsDir);
+
+        private void OnOpenDataDir(object sender, RoutedEventArgs e) => OpenDirectory(StoragePaths.Root);
+
+        /// <summary>用资源管理器打开目录（目录不存在则先建，避免打开失败无反馈）。</summary>
+        private static void OpenDirectory(string dir)
+        {
+            try
+            {
+                Directory.CreateDirectory(dir);
+                Process.Start(new ProcessStartInfo { FileName = dir, UseShellExecute = true });
+            }
+            catch (Exception ex) { SeeMeLog.Error("OpenDirectory", ex); }
+        }
+
+        /// <summary>WebView2 运行时版本；未安装运行时返回原因（这正是常见的"白屏"根因）。</summary>
+        private static string WebView2Version()
+        {
+            try
+            {
+                return Microsoft.Web.WebView2.Core.CoreWebView2Environment.GetAvailableBrowserVersionString() ?? "未知";
+            }
+            catch (Exception ex) { return "不可用（" + ex.GetType().Name + "）"; }
+        }
+
+        /// <summary>
+        /// 组装诊断信息 → **脱敏** → 弹出预览让用户确认 → 确认后才写剪贴板。
+        ///
+        /// <para><b>为什么改成"先预览"</b>：原先点一下就直接进剪贴板，用户看不到自己要发出去什么。
+        /// 文本里有数据目录、安装位置与日志尾部，天然带本机用户名与用户文件路径。
+        /// 「看得见再决定」才是真正的护栏，脱敏（<see cref="DiagnosticInfo.Redact"/>）只是把默认
+        /// 文本降一档敏感度的纵深措施。</para>
+        ///
+        /// <para><b>日志改为可选</b>：摘要部分（版本/系统/WebView2）无身份信息，日志尾部才有。
+        /// 让用户能只发摘要。</para>
+        /// </summary>
+        private void OnCopyDiagnostics(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var includeLog = DiagIncludeLogBox?.IsChecked != false;
+                var sb = new StringBuilder();
+                var ver = typeof(SettingsDialog).Assembly.GetName().Version?.ToString() ?? "?";
+                sb.AppendLine("===== SeeMe 诊断信息 =====");
+                sb.AppendLine("生成时间   : " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                sb.AppendLine("版本       : " + ver);
+                sb.AppendLine("系统       : " + Environment.OSVersion.VersionString
+                              + "（" + (Environment.Is64BitProcess ? "64 位" : "32 位") + " 进程）");
+                sb.AppendLine("运行时     : .NET " + Environment.Version);
+                sb.AppendLine("数据目录   : " + StoragePaths.Root);
+                sb.AppendLine("便携模式   : " + (StoragePaths.IsPortable ? "开启" : "关闭"));
+                sb.AppendLine("安装位置   : " + AppDomain.CurrentDomain.BaseDirectory);
+                sb.AppendLine("日志文件   : " + SeeMeLog.CurrentLogPath);
+                sb.AppendLine("WebView2   : " + WebView2Version());
+                if (includeLog)
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("----- 日志尾部（最近 " + DiagnosticInfo.LogTailLines + " 行）-----");
+                    sb.AppendLine(DiagnosticInfo.ReadLogTail(SeeMeLog.CurrentLogPath, DiagnosticInfo.LogTailLines));
+                }
+                else
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("（已按用户选择略去日志尾部）");
+                }
+
+                // 脱敏：主目录 → %USERPROFILE%，Bearer / key=value 形态的凭据 → <redacted>
+                var text = DiagnosticInfo.Redact(sb.ToString(),
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+
+                var dlg = new DiagnosticPreviewWindow(text, includeLog ? DiagnosticInfo.LogTailLines : 0)
+                {
+                    Owner = this
+                };
+                dlg.ShowDialog();
+
+                if (DiagHint != null)
+                    DiagHint.Text = dlg.Copied ? "已复制到剪贴板" : "已取消（未复制任何内容）";
+            }
+            catch (Exception ex)
+            {
+                if (DiagHint != null) DiagHint.Text = "复制失败：" + ex.Message;
+                SeeMeLog.Error("CopyDiagnostics", ex);
+            }
+        }
+
         private void OnAutoSaveBehaviorChanged(object sender, SelectionChangedEventArgs e)
         {
             if (_loading || AutoSaveBehaviorBox.SelectedIndex < 0) return;
@@ -377,6 +557,21 @@ namespace SeeMe
             if (_loading || CloseBehaviorBox.SelectedIndex < 0) return;
             var v = CloseBehaviorBox.SelectedIndex switch { 1 => "tray", 2 => "ask", _ => "exit" };
             AppSettings.Set(AppSettings.CloseBehaviorKey, v);
+        }
+
+        // ──────────────── 多开与文件接力 ────────────────
+
+        private void OnSingleInstanceChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_loading || SingleInstanceBox.SelectedIndex < 0) return;
+            AppSettings.Set(AppSettings.SingleInstanceKey, SingleInstanceBox.SelectedIndex == 0);
+        }
+
+        private void OnRelayOpenModeChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_loading || RelayOpenModeBox.SelectedIndex < 0) return;
+            AppSettings.Set(AppSettings.RelayOpenModeKey,
+                RelayOpenModeBox.SelectedIndex == 1 ? "current" : "window");
         }
 
         private void OnStartupOpenChanged(object sender, SelectionChangedEventArgs e)
@@ -398,35 +593,145 @@ namespace SeeMe
             _owner.ApplyHistorySize(n);
         }
 
+        // ──────────────── 全文检索索引 ────────────────
+
+        /// <summary>
+        /// 刷新索引区块：显示索引目录、已索引篇数与磁盘占用。
+        ///
+        /// <para><b>为什么要让用户看见规模</b>：内容搜索此前是个完全的黑盒 ——
+        /// 索引建在哪、建了多少、占多大、坏了怎么恢复，界面上一个字都没有。
+        /// 搜索"没结果"时用户无法区分「确实没有」与「索引坏了」。</para>
+        /// </summary>
+        private void RefreshSearchIndexInfo()
+        {
+            if (SearchIndexBox == null) return;
+            try
+            {
+                var idx = _owner.SearchIndex;
+                SearchIndexBox.Text = idx.IndexDirectory;
+                var docs = idx.DocumentCount();
+                var size = FormatBytes(idx.SizeBytes());
+                SetSearchIndexHint(docs == 0
+                    ? "索引尚未建立（首次在搜索框输入「>关键词」时自动建立）。"
+                    : $"已索引 {docs} 篇 · 占用 {size}。索引按文件变化增量维护，一般无需手工重建。");
+            }
+            catch (Exception ex)
+            {
+                SetSearchIndexHint("读取索引信息失败：" + ex.Message);
+                SeeMeLog.Error("RefreshSearchIndexInfo", ex);
+            }
+        }
+
+        private static string FormatBytes(long bytes)
+            => bytes >= 1 << 20 ? (bytes / 1048576.0).ToString("0.0") + " MB"
+             : bytes >= 1024 ? (bytes / 1024.0).ToString("0") + " KB"
+             : bytes + " B";
+
+        /// <summary>
+        /// 写索引区块的提示文本。
+        ///
+        /// <para><b>为什么要有这个小壳</b>：<see cref="OnRebuildSearchIndex"/> 在 <c>await</c> 之后写提示，
+        /// 而编译器在 await 之后会重置字段的可空流状态（期间别的代码可能改动它）→ CS8602。
+        /// 本项目的约定是**用显式守卫而不是 <c>!</c> 压制**（压制只关警告，不增加运行时保证）。</para>
+        /// </summary>
+        private void SetSearchIndexHint(string text)
+        {
+            if (SearchIndexHint != null) SearchIndexHint.Text = text;
+        }
+
+        private void OnClearSearchIndex(object sender, RoutedEventArgs e)
+        {
+            var ok = _owner.SearchIndex.Clear();
+            RefreshSearchIndexInfo();
+            SetSearchIndexHint(ok
+                ? "索引已清空，下次内容搜索会重新建立。"
+                : "清空失败：索引文件可能正被占用，请稍后重试。");
+        }
+
+        /// <summary>重建索引（清空 + 立即按当前历史全量建立）。建索引可能很慢，故是 async void 事件处理器。</summary>
+        private async void OnRebuildSearchIndex(object sender, RoutedEventArgs e)
+        {
+            SetSearchIndexHint("正在重建索引…");
+            try
+            {
+                var outcome = await _owner.RebuildSearchIndexAsync();
+                RefreshSearchIndexInfo();
+                SetSearchIndexHint($"重建完成：已索引 {outcome.IndexedFiles} 篇"
+                                   + (outcome.Updated > 0 ? $"（本次写入 {outcome.Updated} 篇）" : "")
+                                   + "。未提取到文本层的 PDF 会被跳过，打开一次后即可纳入。");
+            }
+            catch (Exception ex)
+            {
+                SetSearchIndexHint("重建失败：" + ex.Message);
+                SeeMeLog.Error("RebuildSearchIndex", ex);
+            }
+        }
+
         // ──────────────── 文件关联 ────────────────
 
-        /// <summary>刷新关联状态文本（Markdown 默认查看器 + 右键菜单两项）。</summary>
+        /// <summary>
+        /// 生成格式分组的勾选列表（勾选态来自注册表的**实际**状态，不是记忆中的状态）。
+        /// 每次应用后重建，保证 UI 与注册表一致。
+        /// </summary>
+        private void FillAssocGroups()
+        {
+            if (AssocGroupsPanel == null) return;
+            AssocGroupsPanel.Children.Clear();
+            var fg = TryFindResource("TextBodyBrush") as System.Windows.Media.Brush ?? System.Windows.Media.Brushes.Gray;
+            foreach (var g in FileAssoc.Groups)
+            {
+                AssocGroupsPanel.Children.Add(new CheckBox
+                {
+                    Content = new TextBlock
+                    {
+                        Text = g.Label + "　" + string.Join(" ", g.Exts),
+                        FontSize = 11,
+                        Foreground = fg,
+                    },
+                    IsChecked = FileAssoc.IsDefault(g),
+                    Margin = new Thickness(0, 2, 0, 2),
+                    Tag = g,
+                });
+            }
+        }
+
+        /// <summary>刷新关联状态文本（已接管的格式 + 右键菜单两项）。</summary>
         private void RefreshAssocStatus()
         {
             if (AssocStatus == null) return;
+            var labels = FileAssoc.DefaultGroupLabels();
             var parts = new List<string>
             {
-                "Markdown 默认查看器：" + (FileAssoc.IsMdDefault() ? "已设置" : "未设置"),
+                "已接管格式：" + (labels.Count == 0 ? "未设置" : string.Join(" / ", labels)),
                 "右键菜单：" + (FileAssoc.IsContextMenuRegistered() ? "已注册" : "未注册")
             };
             AssocStatus.Text = string.Join("　·　", parts);
         }
 
-        private void OnAssocSetMd(object sender, RoutedEventArgs e)
+        private void OnAssocApply(object sender, RoutedEventArgs e)
         {
-            var err = FileAssoc.RegisterMdDefault();
+            var selected = new List<FileAssoc.Group>();
+            foreach (var child in AssocGroupsPanel.Children)
+            {
+                if (child is CheckBox { IsChecked: true, Tag: FileAssoc.Group g })
+                    selected.Add(g);
+            }
+
+            var err = FileAssoc.ApplySelection(selected);
+            FillAssocGroups();
             RefreshAssocStatus();
             if (err != null)
             {
                 MessageBox.Show(this, "设置失败：" + err, "SeeMe 文件关联",
                     MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
             }
-            else
-            {
-                MessageBox.Show(this,
-                    "已将 .md 的默认打开方式设为 SeeMe。\n\n若系统默认应用仍指向其他程序，请在「设置 → 默认应用 → 按文件类型指定默认应用」中选择 SeeMe。",
-                    "SeeMe 文件关联", MessageBoxButton.OK, MessageBoxImage.Information);
-            }
+            MessageBox.Show(this,
+                selected.Count == 0
+                    ? "已取消勾选格式的默认关联（仅移除仍指向 SeeMe 的项，不影响其他程序）。"
+                    : $"已将 {selected.Count} 类格式的默认打开方式设为 SeeMe。\n\n"
+                      + "若系统默认应用仍指向其他程序，请在「设置 → 默认应用 → 按文件类型指定默认应用」中选择 SeeMe。",
+                "SeeMe 文件关联", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         private void OnAssocSetMenu(object sender, RoutedEventArgs e)
@@ -449,8 +754,9 @@ namespace SeeMe
         private void OnAssocClear(object sender, RoutedEventArgs e)
         {
             FileAssoc.UnregisterAll();
+            FillAssocGroups();
             RefreshAssocStatus();
-            MessageBox.Show(this, "已取消全部文件关联（.md 关联仅在仍指向 SeeMe 时移除）。",
+            MessageBox.Show(this, "已取消全部文件关联（默认关联仅在仍指向 SeeMe 时移除）。",
                 "SeeMe 文件关联", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 

@@ -35,6 +35,41 @@ namespace SeeMe
         {
             try
             {
+                // ── 准入校验：所有打开路径的唯一咽喉点 ──
+                // 文件对话框 / 最近文件 / 命令行 / 文件关联 / 单实例接力**全部**经此。
+                // 2026-10-11 之前这里没有任何校验（只有拖拽路径经 FilterSupportedFiles），
+                // 伪造扩展名的文件可以直接被打开 —— 这是仓库长期记录的已知缺口。
+                //
+                // 校验必须在第一个 await **之前**：否则"编辑态先落盘再切换"已经发生，
+                // 用户点了取消，当前文档却已被保存过一轮，时序与直觉相反。
+                var verdict = FileAdmission.Check(path);
+                if (verdict == FileAdmission.Verdict.Unsupported)
+                {
+                    // Check 返回非 Unsupported 即说明 File.Exists 与 Path.GetExtension 都已成功，
+                    // 故此处再取文件名/扩展名是安全的。
+                    StatusText.Text = "不支持的文件类型: " + Path.GetFileName(path);
+                    LogWarn("Open rejected (unsupported): " + Path.GetFileName(path));
+                    return;
+                }
+                if (verdict == FileAdmission.Verdict.ContentMismatch)
+                {
+                    // 刻意**不硬拒**：用户手上可能有"扩展名写错但内容正常"的文件，
+                    // 拒掉会把正常使用挡在门外。把风险显式呈现，由用户拍板 ——
+                    // 与仓库"用户可感知"的一贯口径一致。
+                    var name = Path.GetFileName(path);
+                    var proceed = MessageBox.Show(this,
+                        $"「{name}」的内容与其扩展名（{Path.GetExtension(path)}）不符。\n\n"
+                        + "文件可能被改名、伪造或已损坏。仍要打开吗？",
+                        "SeeMe 打开文件", MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes;
+                    if (!proceed)
+                    {
+                        StatusText.Text = "已取消打开: " + name;
+                        LogWarn("Open cancelled (content/ext mismatch): " + name);
+                        return;
+                    }
+                    LogWarn("Open with content/ext mismatch: " + name);
+                }
+
                 // 编辑态切换文件：先把未落盘的改动保存到原文件，再打开新文件（自动保存计时未到也不丢字）
                 if (state.EditMode) await FlushPendingEditAsync(state);
                 // 离开当前文件前落盘阅读进度。
@@ -111,6 +146,11 @@ namespace SeeMe
             }
             try
             {
+                // 任务栏跳转列表跟随最近文件。用**未过滤**的完整历史（_app.History.Entries），
+                // 而不是下面按搜索词过滤后的视图 —— 跳转列表是系统级入口，不该受页内搜索影响。
+                // 内部有"内容未变即短路"，可放心挂在每次历史变更上。
+                ShellIntegration.ApplyJumpList(_app.History.Entries);
+
                 var source = _app.History.Entries;
                 IEnumerable<string> filtered;
                 if (!string.IsNullOrWhiteSpace(_searchFilter))
@@ -168,26 +208,55 @@ namespace SeeMe
             catch (Exception ex) { LogErr("Refresh list: " + ex.Message); }
         }
 
-        /// <summary>全文检索索引（Lucene）：惰性初始化，索引目录 %LOCALAPPDATA%\SeeMe\lucene。</summary>
+        /// <summary>全文检索索引（Lucene）：惰性初始化，索引目录见 <see cref="StoragePaths.SearchIndexDir"/>。</summary>
         private SearchIndexService? _searchIndex;
 
+        /// <summary>供设置页「索引管理」复用的索引服务实例（与搜索共用同一个，路径一致）。</summary>
+        internal SearchIndexService SearchIndex =>
+            _searchIndex ??= new SearchIndexService(StoragePaths.SearchIndexDir);
+
         /// <summary>
-        /// 内容搜索（搜索框输入 ">关键词"）：走 Lucene 全文索引（秒级），替代旧线性扫描。
-        /// 首次搜索自动建索引（限量 256KB/文件），文件变化自动重建；命中即列出。
+        /// 重建全文检索索引（设置页「重建」按钮）：清空后按当前历史重新建立，在后台线程执行。
+        ///
+        /// <para>历史列表先在 UI 线程快照，避免后台线程读到正在被改动的集合；
+        /// 真正的建索引（含 PDF 文本层提取，可能很慢）全部在后台。</para>
+        /// </summary>
+        public async Task<SearchIndexService.Outcome> RebuildSearchIndexAsync()
+        {
+            var idx = SearchIndex;
+            idx.Clear();
+            var files = _app.History.Entries
+                .Where(p => !string.IsNullOrEmpty(p) && File.Exists(p))
+                .ToList();
+
+            return await Task.Run(() =>
+            {
+                string? PdfTextProvider(string p)
+                    => PdfTextCache.TryRead(p, out var t, out var has) && has ? t : null;
+                return idx.Sync(files, PdfTextProvider);
+            });
+        }
+
+        /// <summary>
+        /// 内容搜索（搜索框输入 "&gt;关键词"）：走 Lucene 全文索引（秒级），替代旧线性扫描。
+        /// 索引按文件签名增量维护（见 <see cref="SearchIndexService"/>），命中时带上下文片段。
         /// </summary>
         private async void RefreshByContent(string keyword)
         {
             try
             {
                 if (string.IsNullOrEmpty(keyword)) { RefreshRecentFilesList(); return; }
-                _searchIndex ??= new SearchIndexService(
-                    Path.Combine(StoragePaths.Root, "lucene"));
                 var kw = keyword.ToLowerInvariant();
+                // 🔴 先在 UI 线程快照：History.Entries 由 UI 线程维护，
+                // 在 Task.Run 里直接枚举它会在并发写入时抛
+                // "Collection was modified; enumeration operation may not execute"
+                // （与 RefreshBacklinks 同一处缺陷，2026-10-11 一并修掉）。
+                var historySnapshot = _app.History.Entries.ToList();
                 // pdfStats: [0]=扫描版 PDF（无文本层） [1]=未提取文本的 PDF
                 var pdfStats = new int[2];
-                var hits = await Task.Run(() =>
+                var outcome = await Task.Run(() =>
                 {
-                    var files = _app.History.Entries
+                    var files = historySnapshot
                         .Where(p => !string.IsNullOrEmpty(p) && File.Exists(p))
                         .ToList();
                     foreach (var p in files)
@@ -201,25 +270,42 @@ namespace SeeMe
                     }
                     string? PdfTextProvider(string p)
                         => PdfTextCache.TryRead(p, out var t, out var has) && has ? t : null;
-                    return _searchIndex!.Search(files, PdfTextProvider, kw, out _).ToList();
+                    return SearchIndex.Search(files, PdfTextProvider, kw);
                 });
 
-                var bookmarked = hits.Where(p => _bookmarks.Contains(p)).ToList();
-                var rest = hits.Where(p => !_bookmarks.Contains(p)).ToList();
+                var hits = outcome.Hits;
+                var bookmarked = hits.Where(h => _bookmarks.Contains(h.Path)).ToList();
+                var rest = hits.Where(h => !_bookmarks.Contains(h.Path)).ToList();
                 var ordered = bookmarked.Concat(rest).ToList();
+
                 RecentFilesList.ItemsSource = null;
-                RecentFilesList.ItemsSource = ordered.Select(p =>
+                // 用 RecentItem 而不是裸字符串：DataTemplate 绑的是 Display / Full 等属性，
+                // 传 string 时所有绑定都取不到值 → 搜索结果会渲染成**空白卡片**
+                // （点击仍能用是因为 Tag 里有路径，所以这个缺陷只在视觉上暴露）。
+                RecentFilesList.ItemsSource = ordered.Select(h =>
                 {
-                    try { return (bookmarked.Contains(p) ? "📌 " : "🔍 ") + Path.GetFileName(p); }
-                    catch { return p; }
+                    var name = Path.GetFileName(h.Path);
+                    return new RecentItem
+                    {
+                        Display = (bookmarked.Any(b => b.Path == h.Path) ? "📌 " : "🔍 ") + ShortenNewFileName(name),
+                        Full = h.Path,
+                        Snippet = h.Snippet,
+                        HasSnippet = !string.IsNullOrEmpty(h.Snippet),
+                    };
                 }).ToList();
                 // Tag 必须与显示顺序一致，否则 GetSelectedRecentPath 按索引取路径会错位
-                RecentFilesList.Tag = ordered;
+                RecentFilesList.Tag = ordered.Select(h => h.Path).ToList();
+
                 var notes = new List<string>();
                 if (pdfStats[1] > 0) notes.Add($"{pdfStats[1]} 个 PDF 未提取（打开一次后可搜索）");
                 if (pdfStats[0] > 0) notes.Add($"{pdfStats[0]} 个扫描版 PDF 无文本层");
+                if (outcome.Updated > 0 || outcome.Removed > 0)
+                    notes.Add($"索引更新 +{outcome.Updated}/-{outcome.Removed}");
                 var pdfNote = notes.Count > 0 ? "；" + string.Join("；", notes) : "";
-                StatusText.Text = (hits.Count > 0 ? $"内容搜索：找到 {hits.Count} 个文件" : "内容搜索：无匹配") + pdfNote;
+                StatusText.Text = (hits.Count > 0
+                        ? $"内容搜索：找到 {hits.Count} 个文件（索引 {outcome.IndexedFiles} 篇）"
+                        : $"内容搜索：无匹配（索引 {outcome.IndexedFiles} 篇）")
+                    + pdfNote;
             }
             catch (Exception ex) { LogErr("RefreshByContent: " + ex.Message); }
         }
@@ -279,6 +365,15 @@ namespace SeeMe
         {
             public string Display { get; set; } = "";
             public string Full { get; set; } = "";
+
+            /// <summary>
+            /// 内容搜索命中处的上下文片段（关键词前后各约 40 字，换行已压缩为空格）。
+            /// 最近文件列表场景下为空串。
+            /// </summary>
+            public string Snippet { get; set; } = "";
+
+            /// <summary>是否显示片段行（XAML 据此切换可见性，避免空片段占一行高度）。</summary>
+            public bool HasSnippet { get; set; }
 
             /// <summary>进度文字，如 "读到 63%"；无进度记录时为空串。</summary>
             public string ProgressText { get; set; } = "";
@@ -608,30 +703,13 @@ namespace SeeMe
         }
 
         /// <summary>校验拖入文件（存在性 + 扩展名 + Magic Bytes），返回支持的文件列表。</summary>
+        /// <remarks>
+        /// 判据已下沉到 <see cref="FileAdmission"/>（与主打开路径 <c>OpenFileInternal</c> 共用同一条）。
+        /// 这里取 <see cref="FileAdmission.Verdict.Accept"/> 这个**严格档**：拖拽是"静默过滤"场景，
+        /// 不弹询问，内容与扩展名不符的条目直接剔除（与旧行为一致）。
+        /// </remarks>
         private static List<string> FilterSupportedFiles(IEnumerable<string> paths)
-        {
-            return paths.Where(p =>
-            {
-                try
-                {
-                    if (!File.Exists(p)) return false;
-                    var ext = Path.GetExtension(p);
-                    if (!FileTypes.IsSupported(ext))
-                        return false;
-                    // Magic Bytes 校验：验证文件头与扩展名一致（逻辑见 MagicBytes.MatchesExt）
-                    // 缓冲区 12 字节：WEBP 的 "WEBP" 标记在偏移 8-11，8 字节不够判定（会越界）。
-                    var header = new byte[12];
-                    try
-                    {
-                        using var fs = new FileStream(p, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                        if (fs.Read(header, 0, 12) < 4) return false;
-                    }
-                    catch { return false; }
-                    return MagicBytes.MatchesExt(ext, header);
-                }
-                catch { return false; }
-            }).ToList();
-        }
+            => paths.Where(FileAdmission.IsAcceptable).ToList();
 
         /// <summary>
         /// 打开拖入的文件（支持一次拖入多个）：

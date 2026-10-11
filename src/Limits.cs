@@ -77,5 +77,48 @@ namespace SeeMe
         /// 按中央目录声明的 entry.Length 累计预检，超限拒绝解析。
         /// </summary>
         public const long MaxDecompressedBytes = 256L * 1024 * 1024;
+
+        /// <summary>
+        /// 编辑页「粘贴图片 → 存到 assets\ 并插入相对路径」的单张图片字节上限。
+        ///
+        /// <para>截图粘贴通常只有几百 KB；上限取 8MB 是为了挡住"从别处复制了一张超大图"——
+        /// 它在消息通道里是 base64（体积膨胀约 1.33 倍），再叠加 JSON 转义，
+        /// 一张 50MB 的图会先让页面侧的字符串拼接吃掉上百 MB 内存。</para>
+        /// </summary>
+        public const long MaxPastedImageBytes = 8L * 1024 * 1024;
+
+        /// <summary>
+        /// 「整篇导出长图」的总像素上限。
+        ///
+        /// <para>拼接结果是 <c>宽 × 高 × 4</c> 字节的位图（RGBA）。上限取 4000 万像素
+        /// ≈ 160 MB 一次性峰值，是桌面应用可接受的量级；再往上就有 OOM 风险，
+        /// 而"整篇超长文档导成一张图"本身也不是合理需求（该用 PDF 导出）。</para>
+        /// </summary>
+        public const long MaxLongImagePixels = 40_000_000;
+
+        /// <summary>
+        /// 整篇长图的单边高度上限。
+        ///
+        /// <para>单独设这道闸是因为 <c>scrollHeight</c> 在异常布局下可能返回天文数字
+        /// （例如某元素被撑成 10 万像素），此时 <c>RenderTargetBitmap</c> 会直接分配失败并抛异常。
+        /// 先按高度挡掉，错误信息才说得清（"文档过长"而不是"内存不足"）。</para>
+        /// </summary>
+        public const int MaxLongImageHeight = 40000;
+
+        /// <summary>
+        /// 整篇长图的**截屏屏数**上限。
+        ///
+        /// <para><b>🔴 为什么必须有这道闸（安全审查发现）</b>：长图导出要先逐屏滚动截取、再拼接，
+        /// 而屏数由**页面自己报告的 <c>scrollHeight</c>** 决定 —— 那是不可信输入。
+        /// 原先只有拼接阶段的高度/像素上限，于是「先截几百屏、把 PNG 全堆在内存里，
+        /// 到拼接时才发现超限」：用户看到的是「点了导出就卡死」，进程内存持续上涨。
+        /// 对一份超大文档（例如含数万行代码块）无需任何攻击即可触发。</para>
+        ///
+        /// <para>上限取 120：每屏成本约 120ms 等待 + 一次 PNG 编码 + 数百 KB 常驻内存，
+        /// 120 屏 ≈ 15 秒与数十 MB，是可接受的最坏情况。
+        /// 它与 <see cref="MaxLongImageHeight"/> 配合 —— 40000px 高、300px 视口才需要 134 屏，
+        /// 正常文档远达不到（700px 视口下 40000px 仅 58 屏）。</para>
+        /// </summary>
+        public const int MaxLongImageSegments = 120;
     }
 }

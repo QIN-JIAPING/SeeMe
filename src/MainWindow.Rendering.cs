@@ -604,23 +604,30 @@ p { font-size:13px; color:var(--secondary); }
                     targetPath = dlg.FileName;
                 }
 
-                var stream = new System.IO.MemoryStream();
-                await state.WebView.CoreWebView2.CapturePreviewAsync(
-                    Microsoft.Web.WebView2.Core.CoreWebView2CapturePreviewImageFormat.Png, stream);
-                stream.Position = 0;
-                var bmp = new System.Windows.Media.Imaging.BitmapImage();
-                bmp.BeginInit();
-                bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-                bmp.StreamSource = stream;
-                bmp.EndInit();
+                // 任务栏进度：截图 + 编码在大文档/2x 分辨率下可能耗时数秒，
+                // 窗口被遮挡时用户只能靠任务栏判断"还在忙"。EndBusy 必须走 finally。
+                ShellIntegration.BeginBusy(this, "正在导出图片…");
+                try
+                {
+                    var stream = new System.IO.MemoryStream();
+                    await state.WebView.CoreWebView2.CapturePreviewAsync(
+                        Microsoft.Web.WebView2.Core.CoreWebView2CapturePreviewImageFormat.Png, stream);
+                    stream.Position = 0;
+                    var bmp = new System.Windows.Media.Imaging.BitmapImage();
+                    bmp.BeginInit();
+                    bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                    bmp.StreamSource = stream;
+                    bmp.EndInit();
 
-                System.Windows.Media.Imaging.BitmapSource src = bmp;
-                if (scale >= 2)
-                    src = new System.Windows.Media.Imaging.TransformedBitmap(bmp, new ScaleTransform(2, 2));
+                    System.Windows.Media.Imaging.BitmapSource src = bmp;
+                    if (scale >= 2)
+                        src = new System.Windows.Media.Imaging.TransformedBitmap(bmp, new ScaleTransform(2, 2));
 
-                var bytes = EncodeBitmap(src, isJpg);
-                await System.IO.File.WriteAllBytesAsync(targetPath, bytes);
-                StatusText.Text = "已导出图片: " + Path.GetFileName(targetPath);
+                    var bytes = EncodeBitmap(src, isJpg);
+                    await System.IO.File.WriteAllBytesAsync(targetPath, bytes);
+                    StatusText.Text = "已导出图片: " + Path.GetFileName(targetPath);
+                }
+                finally { ShellIntegration.EndBusy(this); }
             }
             catch (Exception ex) { LogErr("OnExportImage: " + ex.Message); StatusText.Text = "导出图片失败: " + ex.Message; }
         }

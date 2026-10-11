@@ -292,6 +292,14 @@
                                                 <TextBlock Text="{Binding Display}" TextTrimming="CharacterEllipsis"
                                                            ToolTip="{Binding Full}" VerticalAlignment="Center" FontSize="12"
                                                            Foreground="{DynamicResource TextBodyBrush}"/>
+                                                <!-- 内容搜索命中片段：仅 >关键词 搜索时出现（HasSnippet 由下方 DataTemplate.Triggers 切换）。
+                                                     换行已在 SearchIndexService 里压成空格，这里再兜一层 trimming，
+                                                     避免超长片段把卡片撑高。 -->
+                                                <TextBlock x:Name="SnippetRow" Text="{Binding Snippet}"
+                                                           TextTrimming="CharacterEllipsis" FontSize="10"
+                                                           Margin="0,3,0,0" Opacity="0.72"
+                                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                                           Visibility="Collapsed"/>
                                                 <!-- 阅读进度条：仅有进度（读到 1%~99%）时显示。
                                                      轨道 60px 固定宽，填充宽度由 RecentItem.ProgressWidth 折算传入。
                                                      全部走主题资源，暗色自动适配。 -->
@@ -320,6 +328,13 @@
                                             </StackPanel>
                                         </Grid>
                                     </Border>
+                                    <!-- 片段行只在内容搜索命中时出现。用 DataTemplate.Triggers 而不是给
+                                         Visibility 绑一个布尔转换器 —— 免得为一个 bool 再引入一个 Converter 类。 -->
+                                    <DataTemplate.Triggers>
+                                        <DataTrigger Binding="{Binding HasSnippet}" Value="True">
+                                            <Setter TargetName="SnippetRow" Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </DataTemplate.Triggers>
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
                             <ListBox.ContextMenu>

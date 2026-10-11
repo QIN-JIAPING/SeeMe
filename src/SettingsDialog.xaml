@@ -261,16 +261,45 @@
                             </Grid>
                             <TextBlock Style="{StaticResource SubNote}" Text="输入停顿后自动保存（免手动 Ctrl+S）" Margin="150,0,0,12"/>
                             <Separator Margin="0,10,0,12" Opacity="0.3"/>
+                            <TextBlock Style="{StaticResource RowLabel}" Text="多开与文件接力" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="150"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Style="{StaticResource RowLabel}" Text="单实例运行"/>
+                                <ComboBox Style="{StaticResource SettingsCombo}" x:Name="SingleInstanceBox" Grid.Column="1" Width="220" HorizontalAlignment="Left" SelectionChanged="OnSingleInstanceChanged">
+                                    <ComboBoxItem Content="启用（复用已运行实例）"/>
+                                    <ComboBoxItem Content="关闭（允许多个进程）"/>
+                                </ComboBox>
+                            </Grid>
+                            <Grid Margin="0,0,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="150"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Style="{StaticResource RowLabel}" Text="接力文件打开到"/>
+                                <ComboBox Style="{StaticResource SettingsCombo}" x:Name="RelayOpenModeBox" Grid.Column="1" Width="220" HorizontalAlignment="Left" SelectionChanged="OnRelayOpenModeChanged">
+                                    <ComboBoxItem Content="新窗口（不打断当前阅读）"/>
+                                    <ComboBoxItem Content="当前窗口（替换当前文档）"/>
+                                </ComboBox>
+                            </Grid>
+                            <TextBlock Style="{StaticResource SubNote}" Margin="150,0,0,0" TextWrapping="Wrap"
+                                       Text="启用后双击文档会转交给已运行的 SeeMe 处理，只保留一个进程（每个文档仍是独立窗口）。改动需重启应用生效。"/>
+                            <Separator Margin="0,10,0,12" Opacity="0.3"/>
                             <TextBlock Style="{StaticResource RowLabel}" Text="文件关联" FontWeight="SemiBold" Margin="0,0,0,6"/>
-                            <TextBlock x:Name="AssocStatus" Style="{StaticResource SubNote}" Margin="0,0,0,8"/>
+                            <TextBlock Style="{StaticResource SubNote}" Margin="0,0,0,8"
+                                       Text="勾选要让 SeeMe 接管的格式，再点「应用选中项」。未勾选的格式不会被改动。"/>
+                            <StackPanel x:Name="AssocGroupsPanel" Margin="0,0,0,10"/>
                             <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                                <Button Content="设为 .md 默认查看器" Style="{StaticResource ChipBtn}" Padding="12,5"
-                                        FontSize="11" Click="OnAssocSetMd"/>
+                                <Button Content="应用选中项" Style="{StaticResource ChipBtn}" Padding="14,5"
+                                        FontSize="11" Click="OnAssocApply"/>
                                 <Button Content="注册右键菜单" Style="{StaticResource ChipBtn}" Padding="12,5"
                                         FontSize="11" Margin="6,0,0,0" Click="OnAssocSetMenu"/>
                                 <Button Content="取消全部关联" Style="{StaticResource ChipBtn}" Padding="12,5"
                                         FontSize="11" Margin="6,0,0,0" Click="OnAssocClear"/>
                             </StackPanel>
+                            <TextBlock x:Name="AssocStatus" Style="{StaticResource SubNote}" Margin="0,0,0,6"/>
                             <TextBlock Style="{StaticResource SubNote}"
                                        Text="写入 HKCU 注册表，无需管理员权限。若系统默认应用已被其他程序锁定，需在「设置 → 默认应用」中手动更改。"/>
                         </StackPanel>
@@ -354,9 +383,21 @@
                         <!-- ════════ 3 快捷键 ════════ -->
                         <StackPanel x:Name="Sec3" Visibility="Collapsed">
                             <TextBlock Style="{StaticResource SectionTitle}" Text="快捷键"/>
-                            <TextBlock Style="{StaticResource SubNote}" Text="当前内置快捷键（自定义绑定 · 即将支持）" Margin="0,0,0,10"/>
-                            <ListBox x:Name="KeymapList" Background="Transparent" BorderThickness="0"
-                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"/>
+                            <TextBlock Style="{StaticResource SubNote}" Margin="0,0,0,6"
+                                       Text="选中一条后点「修改快捷键」，然后直接按下想要的组合键。改动即时生效，无需重启。"/>
+                            <ListBox x:Name="KeymapList" Background="Transparent" BorderThickness="0" Height="250"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     MouseDoubleClick="OnKeymapDoubleClick"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <Button Content="修改快捷键" Style="{StaticResource ChipBtn}" Padding="14,5"
+                                        FontSize="11" Click="OnKeymapEdit"/>
+                                <Button Content="恢复全部默认" Style="{StaticResource ChipBtn}" Padding="14,5"
+                                        FontSize="11" Margin="6,0,0,0" Click="OnKeymapResetAll"/>
+                                <TextBlock x:Name="KeymapHint" Style="{StaticResource SubNote}" VerticalAlignment="Center"
+                                           Margin="10,0,0,0"/>
+                            </StackPanel>
+                            <TextBlock Style="{StaticResource SubNote}" Margin="0,8,0,0" TextWrapping="Wrap"
+                                       Text="Esc、无修饰键的方向键与回车、F12 属上下文相关按键，不参与自定义。双击列表项亦可修改。"/>
                         </StackPanel>
 
                         <!-- ════════ 4 导出设置 ════════ -->
@@ -525,6 +566,57 @@
                                         FontSize="11" Click="OnClearCache"/>
                             </Grid>
                             <TextBlock Style="{StaticResource SubNote}" Text="删除 WebView2 缓存目录（运行中的文件跳过，重启后完全生效）。" Margin="0,4,0,0"/>
+
+                            <!-- ════════ 全文检索索引 ════════
+                                 「>关键词」内容搜索用的 Lucene 索引。索引按文件签名增量维护，
+                                 正常情况下不需要用户操心；这里提供可见的规模信息与清空/重建入口，
+                                 用于排查"搜索没结果"（索引损坏）或回收磁盘。 -->
+                            <TextBlock Style="{StaticResource RowLabel}" Text="全文检索索引" Margin="0,12,0,4"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="SearchIndexBox" FontSize="11" IsReadOnly="True" Padding="8,6"
+                                         Background="{DynamicResource InputBgBrush}" BorderThickness="0"
+                                         Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                <Button Grid.Column="1" Content="清空" Style="{StaticResource ChipBtn}" Margin="6,0,0,0" Padding="14,5"
+                                        FontSize="11" Click="OnClearSearchIndex"/>
+                                <Button Grid.Column="2" Content="重建" Style="{StaticResource ChipBtn}" Margin="6,0,0,0" Padding="14,5"
+                                        FontSize="11" Click="OnRebuildSearchIndex"/>
+                            </Grid>
+                            <TextBlock x:Name="SearchIndexHint" Style="{StaticResource SubNote}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+
+                            <!-- ════════ 诊断 ════════
+                                 日志是全项目唯一的排障入口（SeeMeLog 三通道）。
+                                 此前用户报障时开发者无法从任何界面得知日志在哪 —— 这里把路径、目录入口
+                                 和一键复制诊断信息集中起来，把「报障成本」降到一次点击。 -->
+                            <Separator Margin="0,14,0,12" Opacity="0.3"/>
+                            <TextBlock Style="{StaticResource RowLabel}" Text="诊断" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="LogDirBox" FontSize="11" IsReadOnly="True" Padding="8,6"
+                                         Background="{DynamicResource InputBgBrush}" BorderThickness="0"
+                                         Foreground="{DynamicResource TextSecondaryBrush}"/>
+                                <Button Grid.Column="1" Content="打开日志目录" Style="{StaticResource ChipBtn}" Margin="6,0,0,0"
+                                        Padding="12,5" FontSize="11" Click="OnOpenLogDir"/>
+                                <Button Grid.Column="2" Content="打开数据目录" Style="{StaticResource ChipBtn}" Margin="6,0,0,0"
+                                        Padding="12,5" FontSize="11" Click="OnOpenDataDir"/>
+                            </Grid>
+                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                <Button Content="预览并复制诊断信息…" Style="{StaticResource ChipBtn}" Padding="14,5"
+                                        FontSize="11" Click="OnCopyDiagnostics"/>
+                                <CheckBox x:Name="DiagIncludeLogBox" Content="包含最近日志" FontSize="11"
+                                          IsChecked="True" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                                <TextBlock x:Name="DiagHint" Style="{StaticResource SubNote}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                            </StackPanel>
+                            <TextBlock Style="{StaticResource SubNote}" Margin="0,4,0,0" TextWrapping="Wrap"
+                                       Text="复制前先显示完整内容供你确认（用户主目录已替换为 %USERPROFILE%）。日志里会出现你打开过的文件路径，不需要时取消勾选。"/>
                         </StackPanel>
 
                         <!-- ════════ 7 关于 ════════ -->

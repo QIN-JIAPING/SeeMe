@@ -417,10 +417,19 @@ namespace SeeMe
                 // 当前文件名（无扩展名）与文件名本身作为匹配目标
                 var nameNoExt = Path.GetFileNameWithoutExtension(current);
                 var nameFull = Path.GetFileName(current);
+
+                // 🔴 必须先在 **UI 线程** 上快照，再把快照交给后台线程枚举。
+                // History.Entries 由 UI 线程维护（打开文件、单实例接力都会往里写），
+                // 直接在 Task.Run 里 foreach 它 → 后台枚举期间集合被改就抛
+                //   InvalidOperationException: Collection was modified; enumeration operation may not execute
+                // 这是**既有缺陷**（不是本轮引入），但单实例接力让"多窗口 + 历史并发变更"变得常见，
+                // 2026-10-11 的运行期验证把它实测逼了出来（日志：ERROR App: RefreshBacklinks: Collection was modified）。
+                var entries = _app.History.Entries.ToList();
+
                 var backlinks = await Task.Run(() =>
                 {
                     var results = new System.Collections.Generic.List<string>();
-                    foreach (var p in _app.History.Entries)
+                    foreach (var p in entries)
                     {
                         if (string.IsNullOrEmpty(p) || !File.Exists(p)) continue;
                         var ext = Path.GetExtension(p).ToLowerInvariant();

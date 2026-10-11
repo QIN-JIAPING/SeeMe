@@ -352,6 +352,24 @@ namespace SeeMe
             _ = PushThemeAsync(targetDark);
         }
 
+        /// <summary>
+        /// 由外部注入、待 <see cref="OnLoaded"/> 打开的初始文件（单实例「文件接力」路径，见 <see cref="SingleInstance"/>）。
+        ///
+        /// <para><b>为什么不能省掉这个字段</b>：窗口原本只从
+        /// <c>Environment.GetCommandLineArgs()</c> 取启动文件，而接力场景下首实例的命令行里
+        /// **没有**这个后来转交的文件；且 <c>Show()</c> 返回时 OnLoaded 还没跑，
+        /// 不能直接调打开方法（见 <see cref="App.CreateWindow"/> 的注释）。</para>
+        ///
+        /// <para>消费一次即清空，避免同一窗口后续刷新时被重复打开。</para>
+        /// </summary>
+        public string? PendingOpenPath { get; set; }
+
+        /// <summary>
+        /// 窗口是否已完成 <see cref="OnLoaded"/> 装配（服务实例就绪，可安全接受外部投递的文件）。
+        /// 单实例接力用它判断目标窗口能不能立即收文件 —— <c>_app</c> 为 <c>null!</c> 时投递会 NRE。
+        /// </summary>
+        public bool IsReady => _app != null && _app.Left != null;
+
         /// <summary>当前活动面板的文件名（导出对话框默认文件名）。</summary>
         public string? CurrentFileName
         {
@@ -392,13 +410,16 @@ namespace SeeMe
             }
             sb.Append("}catch(e){}})();");
             await wb.ExecuteScriptAsync(sb.ToString());
-            // 2. 静默打印到 PDF
+            // 2. 静默打印到 PDF（任务栏显示不确定进度：长文档可能耗时数秒，界面别无反馈）
+            ShellIntegration.BeginBusy(this, "正在导出 PDF…");
             try
             {
                 await wb.PrintToPdfAsync(filePath, null);
             }
             finally
             {
+                // 先收进度再恢复浏览态：即使恢复脚本抛异常，也不会把任务栏永久留在"滚动中"
+                ShellIntegration.EndBusy(this);
                 // 3. 恢复浏览态：清掉所有 class 和水印 style
                 await wb.ExecuteScriptAsync("(function(){try{var b=document.body;if(b){b.classList.remove('pdf-toc');b.classList.remove('pdf-pageno');b.classList.remove('pdf-watermark');}var s=document.getElementById('__seeme_pdf_wm');if(s)s.remove();}catch(e){}})();");
             }
@@ -695,7 +716,14 @@ window.addEventListener('drop',function(e){
 
             var args = Environment.GetCommandLineArgs();
             string? leftFromArgs = null;
-            if (args.Length >= 2)
+            // 优先级：单实例接力注入的路径 > 本进程命令行参数。
+            // 接力路径只有开新窗口时才有值（见 PendingOpenPath），且消费一次即清空。
+            if (!string.IsNullOrEmpty(PendingOpenPath) && File.Exists(PendingOpenPath))
+            {
+                leftFromArgs = PendingOpenPath;
+                PendingOpenPath = null;
+            }
+            else if (args.Length >= 2)
             {
                 try
                 {
@@ -930,90 +958,51 @@ window.addEventListener('drop',function(e){
             win.ShowDialog();
         }
 
+        /// <summary>
+        /// 窗口级快捷键分派。
+        ///
+        /// <para><b>为什么是 PreviewKeyDown（隧道）</b>：WebView2 有焦点时按键先经父窗口，
+        /// 只有隧道阶段才有机会拦下（见构造函数里的挂接注释）。</para>
+        ///
+        /// <para><b>可绑定命令走 <see cref="ShortcutRegistry"/></b>：手势做**精确匹配**
+        /// （含修饰键），因此 <c>Ctrl+P</c> 与 <c>Ctrl+Shift+P</c> 不再依赖 if 的书写顺序来区分 ——
+        /// 旧实现里把两条分支写反就会静默改变行为。</para>
+        ///
+        /// <para><b>仍硬编码的按键</b>：Esc（取消选择）、无修饰键 ←/→/Enter（键盘流快速导航，
+        /// 仅在特定上下文生效）与 F12（开发者工具）。它们要么是「上下文相关」而非全局命令，
+        /// 要么无修饰键绑定会与 WebView 内的文本输入冲突，故不纳入自定义。</para>
+        /// </summary>
         private void OnWindowKeyDown(object sender, KeyEventArgs e)
         {
-            if (e.Key == Key.F5)
+            var gesture = ShortcutRegistry.Normalize(Keyboard.Modifiers, e.Key);
+            if (gesture == null) return;
+
+            var bindings = ShortcutRegistry.Resolved();
+
+            string? Bound(string id) => bindings.TryGetValue(id, out var g) ? g : null;
+
+            // ① 刷新：旧实现把 F5 放在「命令面板已打开」的早退**之前**，
+            //    即面板打开时 F5 仍然生效。此处保持同一顺序，避免成为隐性回归。
+            if (gesture == Bound("refresh"))
             {
-                var target = ActiveOrLeft;
-                if (target != null && !string.IsNullOrEmpty(target.CurrentFile))
-                {
-                    _ = ReloadFileAsync(target, true, target.ResetCts());
-                    StatusText.Text = "已刷新 " + Path.GetFileName(target.CurrentFile);
-                }
-                else
-                    StatusText.Text = "当前栏未打开文件";
+                RefreshActiveFromShortcut();
                 e.Handled = true;
                 return;
             }
-
-            var ctrl = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
-            var shift = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
-
-            // Ctrl+Shift+P：开关独立命令面板窗口（VS Code 同款——避开 WebView2 Chromium 抢 Ctrl+K 调搜索栏）
-            if (ctrl && shift && e.Key == Key.P)
+            // ② 命令面板开关：必须早于下面的面板早退，否则打开后无法再用快捷键关闭。
+            if (gesture == Bound("palette"))
             {
                 TogglePaletteWindow();
                 e.Handled = true;
                 return;
             }
-            // 命令面板打开时：其余键交给窗口自身处理
+            // ③ 面板打开时，其余键交给面板窗口自己处理
             if (_paletteWindow != null && _paletteWindow.IsVisible) return;
 
-            if (ctrl && e.Key == Key.O)
-            {
-                if (_activePanel != null) ShowOpenFor(_activePanel);
-                else if (_app.Left != null) ShowOpenFor(_app.Left);
-                e.Handled = true;
-            }
-            else if (ctrl && e.Key == Key.T)
-            {
-                SetSplitMode(!_app.IsSplitMode);
-                e.Handled = true;
-            }
-            else if (ctrl && e.Key == Key.N)
-            {
-                if (Application.Current is App app) app.CreateWindow();
-                e.Handled = true;
-            }
-            else if (ctrl && (e.Key == Key.W || e.Key == Key.F4))
-            {
-                Close();
-                e.Handled = true;
-            }
-            else if (ctrl && shift && e.Key == Key.D)
-            {
-                OnThemeToggle(this, new RoutedEventArgs());
-                e.Handled = true;
-            }
-            else if (ctrl && e.Key == Key.F)
-            {
-                var tgt = ActiveOrLeft;
-                if (tgt != null) ShowFind(tgt);
-                e.Handled = true;
-            }
-            else if (ctrl && e.Key == Key.P)
-            {
-                // 打印：MD/Office/PDF 文本视图 → WebView2 系统打印对话框
-                PrintActivePanel();
-                e.Handled = true;
-            }
-            else if (ctrl && e.Key == Key.D0)
-            {
-                SetZoomActive(1.0);
-                e.Handled = true;
-            }
-            else if (ctrl && (e.Key == Key.Add || e.Key == Key.OemPlus || e.Key == Key.Subtract || e.Key == Key.OemMinus))
-            {
-                var tgt = ActiveOrLeft;
-                if (tgt != null)
-                {
-                    double step = 0.1;
-                    if (e.Key == Key.Add || e.Key == Key.OemPlus) SetZoom(tgt, Math.Min(2.5, tgt.FontScale + step));
-                    else SetZoom(tgt, Math.Max(0.5, tgt.FontScale - step));
-                }
-                e.Handled = true;
-            }
-            else if (e.Key == Key.Escape)
+            if (TryRunCommand(gesture)) { e.Handled = true; return; }
+
+            // ── 上下文相关的固定按键（见方法注释：不参与自定义） ──
+            if (e.Key == Key.Escape)
             {
                 _activePanel = null;
                 UpdateActivePanelVisual();
@@ -1035,11 +1024,6 @@ window.addEventListener('drop',function(e){
                 OpenActiveWithDefaultApp();
                 e.Handled = true;
             }
-            else if (!ctrl && !shift && e.Key == Key.F11)
-            {
-                TogglePresentation();
-                e.Handled = true;
-            }
             else if (e.Key == Key.F12 && AppSettings.Get(AppSettings.DevToolsKey, false))
             {
                 var tgt = ActiveOrLeft;
@@ -1049,7 +1033,109 @@ window.addEventListener('drop',function(e){
                     e.Handled = true;
                 }
             }
+            // 兼容旧行为：Ctrl+F4 与 Ctrl+W 同为「关闭窗口」。
+            // 不占命令表一行（用户看到的「关闭窗口」仍只有一条），但只要没被用户改绑到别的命令就仍然生效；
+            // 用户若把 Ctrl+F4 绑给其他命令，上面的 TryRunCommand 会先命中，此处自然让位。
+            else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.F4)
+            {
+                Close();
+                e.Handled = true;
+            }
         }
+
+        /// <summary>按手势执行可绑定命令；命中返回 true（调用方据此设置 <c>e.Handled</c>）。</summary>
+        private bool TryRunCommand(string gesture)
+        {
+            foreach (var cmd in ShortcutRegistry.All)
+            {
+                if (!string.Equals(ShortcutRegistry.GetGesture(cmd.Id), gesture, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                RunCommand(cmd.Id);
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// 命令 id → 实际动作。命令 id 是 <see cref="ShortcutRegistry.All"/> 的稳定契约，
+        /// **新增命令时两处都要改**（漏改的表现是"改了键位但按下去没反应"）。
+        /// </summary>
+        private void RunCommand(string id)
+        {
+            switch (id)
+            {
+                case "open":
+                    if (_activePanel != null) ShowOpenFor(_activePanel);
+                    else if (_app.Left != null) ShowOpenFor(_app.Left);
+                    break;
+                case "newWindow":
+                    if (Application.Current is App app) app.CreateWindow();
+                    break;
+                case "closeWindow":
+                    Close();
+                    break;
+                case "refresh":
+                    RefreshActiveFromShortcut();
+                    break;
+                case "palette":
+                    TogglePaletteWindow();
+                    break;
+                case "split":
+                    SetSplitMode(!_app.IsSplitMode);
+                    break;
+                case "theme":
+                    OnThemeToggle(this, new RoutedEventArgs());
+                    break;
+                case "presentation":
+                    TogglePresentation();
+                    break;
+                case "find":
+                    {
+                        var tgt = ActiveOrLeft;
+                        if (tgt != null) ShowFind(tgt);
+                        break;
+                    }
+                case "zoomReset":
+                    SetZoomActive(1.0);
+                    break;
+                case "zoomIn":
+                    AdjustZoomByStep(+1);
+                    break;
+                case "zoomOut":
+                    AdjustZoomByStep(-1);
+                    break;
+                case "print":
+                    PrintActivePanel();
+                    break;
+            }
+        }
+
+        /// <summary>刷新当前栏（快捷键 F5 用；无打开文件时给出状态栏提示而不是静默无反应）。</summary>
+        private void RefreshActiveFromShortcut()
+        {
+            var target = ActiveOrLeft;
+            if (target != null && !string.IsNullOrEmpty(target.CurrentFile))
+            {
+                _ = ReloadFileAsync(target, true, target.ResetCts());
+                StatusText.Text = "已刷新 " + Path.GetFileName(target.CurrentFile);
+            }
+            else
+            {
+                StatusText.Text = "当前栏未打开文件";
+            }
+        }
+
+        /// <summary>按方向缩放当前栏：步长 0.1，钳制 0.5–2.5（与命令面板同一区间）。</summary>
+        private void AdjustZoomByStep(int direction)
+        {
+            var tgt = ActiveOrLeft;
+            if (tgt == null) return;
+            const double step = 0.1;
+            SetZoom(tgt, direction > 0
+                ? Math.Min(2.5, tgt.FontScale + step)
+                : Math.Max(0.5, tgt.FontScale - step));
+        }
+
 
 
         private void OnOpenL(object sender, RoutedEventArgs e)

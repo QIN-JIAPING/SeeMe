@@ -70,6 +70,15 @@ namespace SeeMe
         public static string CacheDir => Path.Combine(Root, "cache");
 
         /// <summary>
+        /// Lucene 全文检索索引目录（<c>Root\lucene</c>）。
+        ///
+        /// <para>收敛到这里的理由与 <see cref="WebView2DataDir"/> 相同：索引目录原先由
+        /// <c>MainWindow.RefreshByContent</c> 就地 <c>Path.Combine(Root, "lucene")</c> 拼出，
+        /// 而设置页要显示它的大小/提供清空入口 —— 两处各拼一次就会像 WebView2 缓存那样漂移。</para>
+        /// </summary>
+        public static string SearchIndexDir => Path.Combine(Root, "lucene");
+
+        /// <summary>
         /// WebView2 用户数据目录（<c>Root\WebView2Data</c>）。
         ///
         /// <para><b>为什么必须在这里定义</b>：WebView2 默认会在 exe 旁建

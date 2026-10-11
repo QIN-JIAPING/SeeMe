@@ -9,7 +9,7 @@
     <ApplicationIcon>src\app_icon.ico</ApplicationIcon>
     <AssemblyName>SeeMe</AssemblyName>
     <RootNamespace>SeeMe</RootNamespace>
-    <Version>1.0.3</Version>
+    <Version>1.0.4</Version>
     <!-- 版本相关的标准属性：SDK 会从这些派生出程序集版本特性。
          改版本只需改上面的 <Version> —— 下面三项一律引用它，不要写死。 -->
     <AssemblyVersion>$(Version).0</AssemblyVersion>

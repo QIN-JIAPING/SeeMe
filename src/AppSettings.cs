@@ -51,6 +51,8 @@ namespace SeeMe
         public const string PdfPageNumberKey      = "pdfPageNumber";    // bool（PDF 导出页码）
         public const string PdfWatermarkKey       = "pdfWatermark";     // bool（PDF 导出水印）
         public const string PdfWatermarkTextKey   = "pdfWatermarkText"; // string（水印文字）
+        public const string SingleInstanceKey     = "singleInstance";   // bool（单实例：后续启动的文件转交给已运行实例）
+        public const string RelayOpenModeKey      = "relayOpenMode";    // window / current（接力文件开在新窗口还是当前窗口）
 
         private static Dictionary<string, JsonNode?> Cache = LoadAll();
 

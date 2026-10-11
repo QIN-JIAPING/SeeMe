@@ -397,7 +397,14 @@ namespace SeeMe
 
         // ═══════════════════ 打印 ═══════════════════
 
-        /// <summary>调用 WebView2 系统打印对话框（Markdown/Office/PDF 文本视图均走当前 DOM 打印）。</summary>
+        /// <summary>
+        /// 调用 WebView2 打印对话框（Markdown/Office/PDF 文本视图均走当前 DOM 打印）。
+        ///
+        /// <para><b>这里刻意用 <see cref="CoreWebView2PrintDialogKind.Browser"/></b>：
+        /// 它是 Chromium 的浏览器打印对话框，<b>自带完整打印预览</b>（分页缩略图 / 缩放 /
+        /// 页范围 / 双面等），无需再自建一套 WPF 预览。
+        /// 换用 <c>PrintDialogKind.System</c> 反而会退化成没有预览的系统对话框。</para>
+        /// </summary>
         private void PrintActivePanel()
         {
             var st = ActiveOrLeft;

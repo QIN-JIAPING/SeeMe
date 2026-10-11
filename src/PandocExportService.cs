@@ -188,45 +188,66 @@ namespace SeeMe
 
             try
             {
-                var psi = new ProcessStartInfo
+                // 自包含 HTML 是 SeeMe 的别名 → pandoc 侧仍导出 html，另加内嵌资源开关。
+                var selfContained = format == SupportedExportFormats.SelfContainedHtmlFormat;
+                var pandocFormat = selfContained ? "html" : format;
+
+                var first = await RunPandocAsync(pandoc, inputPath, outputPath, pandocFormat!, selfContained, useLegacySelfContained: false);
+                if (first.Success) return first;
+
+                // pandoc 2.19 起 --embed-resources 取代 --self-contained（3.x 已移除旧名）。
+                // 不解析版本号，直接按"旧名再试一次"降级 —— 少一处版本判断就少一处漂移。
+                if (selfContained && first.Message.Contains("embed-resources", StringComparison.OrdinalIgnoreCase))
                 {
-                    FileName = pandoc,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-                // 使用 ArgumentList 逐参数传递，避免文件名含引号/空格导致参数解析错误或被注入
-                psi.ArgumentList.Add(inputPath);
-                psi.ArgumentList.Add("-o");
-                psi.ArgumentList.Add(outputPath);
-                psi.ArgumentList.Add("-f");
-                psi.ArgumentList.Add("markdown");
-                psi.ArgumentList.Add("-t");
-                psi.ArgumentList.Add(format);
-                psi.ArgumentList.Add("--wrap=none");
-
-                using var proc = new Process { StartInfo = psi };
-
-                proc.Start();
-                var stdout = await proc.StandardOutput.ReadToEndAsync();
-                var stderr = await proc.StandardError.ReadToEndAsync();
-                await proc.WaitForExitAsync();
-
-                if (proc.ExitCode == 0)
-                {
-                    return (true, outputPath);
+                    var legacy = await RunPandocAsync(pandoc, inputPath, outputPath, pandocFormat!, selfContained, useLegacySelfContained: true);
+                    if (legacy.Success) return legacy;
+                    return legacy;
                 }
-                else
-                {
-                    var errMsg = !string.IsNullOrEmpty(stderr) ? stderr.Trim() : "未知错误 (exit code " + proc.ExitCode + ")";
-                    return (false, "pandoc 导出失败: " + errMsg);
-                }
+                return first;
             }
             catch (Exception ex)
             {
                 return (false, "pandoc 调用异常: " + ex.Message);
             }
+        }
+
+        /// <summary>执行一次 pandoc 转换（参数用 ArgumentList 逐个传递，避免注入与空格解析问题）。</summary>
+        private static async Task<(bool Success, string Message)> RunPandocAsync(
+            string pandoc, string inputPath, string outputPath, string format,
+            bool selfContained, bool useLegacySelfContained)
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = pandoc,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add(inputPath);
+            psi.ArgumentList.Add("-o");
+            psi.ArgumentList.Add(outputPath);
+            psi.ArgumentList.Add("-f");
+            psi.ArgumentList.Add("markdown");
+            psi.ArgumentList.Add("-t");
+            psi.ArgumentList.Add(format);
+            psi.ArgumentList.Add("--wrap=none");
+            if (selfContained)
+            {
+                // --standalone 是内嵌资源的前提：没有它 pandoc 只输出正文片段，图片根本不会被引用。
+                psi.ArgumentList.Add("--standalone");
+                psi.ArgumentList.Add(useLegacySelfContained ? "--self-contained" : "--embed-resources");
+            }
+
+            using var proc = new Process { StartInfo = psi };
+            proc.Start();
+            var stdout = await proc.StandardOutput.ReadToEndAsync();
+            var stderr = await proc.StandardError.ReadToEndAsync();
+            await proc.WaitForExitAsync();
+
+            if (proc.ExitCode == 0) return (true, outputPath);
+            var errMsg = !string.IsNullOrEmpty(stderr) ? stderr.Trim() : "未知错误 (exit code " + proc.ExitCode + ")";
+            return (false, "pandoc 导出失败: " + errMsg);
         }
 
         // ──────────────── 设置持久化 ────────────────

@@ -26,7 +26,10 @@
 // 均定义于本 partial 类的其他文件，跨文件可见。
 
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Web.WebView2.Core;
 
@@ -350,5 +353,162 @@ namespace SeeMe
 
         private static int BE32(byte[] b, int i) => (b[i] << 24) | (b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3];
         private static int LE32(byte[] b, int i) => b[i] | (b[i + 1] << 8) | (b[i + 2] << 16) | (b[i + 3] << 24);
+
+        // ═══════════════════ 整篇长图导出 ═══════════════════
+
+        /// <summary>逐屏截取之间的等待（毫秒）：<c>scrollTo</c> 之后必须让 Chromium 真正重绘一帧再截。</summary>
+        private const int LongImageSegmentDelayMs = 120;
+
+        /// <summary>
+        /// 把当前预览<b>整篇</b>导出为一张长图（滚动截屏 + 拼接）。
+        ///
+        /// <para><b>为什么不能用 <c>CapturePreviewAsync</c> 一次搞定</b>：它只捕获 WebView 的
+        /// <b>可见视口</b>，文档再长也只给一屏。要拿到整篇只能逐屏滚动、逐屏截取，
+        /// 再按滚动偏移拼成一张（见 <see cref="LongImageExporter"/>）。</para>
+        ///
+        /// <para><b>代价与取舍</b>：N 屏就要 N 次截屏 + N×<see cref="LongImageSegmentDelayMs"/> 等待，
+        /// 长文档会明显耗时（因此挂了任务栏进度）；且拼接结果是像素位图，几千像素高的文档
+        /// 会占用可观内存 —— 两道上限见 <see cref="Limits.MaxLongImageHeight"/> /
+        /// <see cref="Limits.MaxLongImagePixels"/>，超限时明确建议改用 PDF 导出。</para>
+        /// </summary>
+        public async Task ExportActiveToLongImageAsync()
+        {
+            var state = ActiveOrLeft;
+            var wv = state?.WebView;
+            if (state?.WebView?.CoreWebView2 == null || wv == null
+                || wv.ActualWidth < 10 || wv.ActualHeight < 10)
+            {
+                StatusText.Text = "无可导出的预览内容";
+                return;
+            }
+
+            var metrics = await ReadPageMetricsAsync(state);
+            if (metrics == null)
+            {
+                StatusText.Text = "无法读取页面尺寸，导出长图失败";
+                return;
+            }
+
+            var viewportCss = (int)Math.Round(wv.ActualWidth);
+            var viewportHeight = (int)Math.Round(wv.ActualHeight);
+            // 可滚动范围 + 视口 = 真实整篇高度。直接用 scrollHeight 在部分布局下会偏大，
+            // 多出来的那截会是纯背景色，看起来像"图底部莫名多了一大块空白"。
+            var canvasHeightCss = Math.Min(
+                (int)Math.Ceiling(metrics.Value.Height),
+                (int)Math.Ceiling(metrics.Value.MaxScroll) + viewportHeight);
+            if (canvasHeightCss <= 0 || viewportCss <= 0)
+            {
+                StatusText.Text = "页面尺寸异常，导出长图失败";
+                return;
+            }
+
+            // 🔴 上限必须在**开始截屏之前**判断完（安全审查 2026-10-11）。
+            // canvasHeightCss 来自页面自己报告的 scrollHeight —— 不可信输入。
+            // 若放到拼接时才判，一份超大文档会先滚几百屏、把 PNG 全堆进内存才失败，
+            // 用户看到的是「点了导出就卡死」。屏数与偏移由 LongImageExporter 统一计算，
+            // 避免驱动侧与拼接侧两套算法漂移。
+            var offsets = LongImageExporter.SegmentOffsets(canvasHeightCss, viewportHeight);
+            var preflightError = LongImageExporter.Preflight(viewportCss, canvasHeightCss, offsets.Count);
+            if (preflightError != null)
+            {
+                StatusText.Text = "导出长图失败：" + preflightError;
+                return;
+            }
+
+            // 选保存路径。长图一律 PNG：JPEG 在长图的纯色区容易出现块状伪影。
+            var baseName = string.IsNullOrEmpty(state.CurrentFile)
+                ? "preview" : Path.GetFileNameWithoutExtension(state.CurrentFile);
+            var fixedDir = AppSettings.Get(AppSettings.ExportPathModeKey, "ask") == "fixed"
+                ? AppSettings.Get(AppSettings.ExportPathKey, "") : "";
+            string targetPath;
+            if (!string.IsNullOrEmpty(fixedDir) && Directory.Exists(fixedDir))
+            {
+                targetPath = Path.Combine(fixedDir, baseName + "-长图.png");
+            }
+            else
+            {
+                var dlg = new Microsoft.Win32.SaveFileDialog
+                {
+                    FileName = baseName + "-长图.png",
+                    Filter = "PNG 长图 (*.png)|*.png",
+                    Title = "导出整篇为长图"
+                };
+                if (dlg.ShowDialog(this) != true) return;
+                targetPath = dlg.FileName;
+            }
+
+            ShellIntegration.BeginBusy(this, "正在导出长图…");
+            try
+            {
+                var frames = new List<byte[]>(offsets.Count);
+                foreach (var offset in offsets)
+                {
+                    await ScrollToAsync(state, offset);
+                    await Task.Delay(LongImageSegmentDelayMs);
+                    using var ms = new MemoryStream();
+                    await state.WebView!.CoreWebView2!.CapturePreviewAsync(
+                        CoreWebView2CapturePreviewImageFormat.Png, ms);
+                    frames.Add(ms.ToArray());
+                }
+
+                var result = LongImageExporter.Stitch(frames, offsets, viewportCss, canvasHeightCss);
+                if (!result.Ok)
+                {
+                    StatusText.Text = "导出长图失败：" + (result.Error ?? "未知原因");
+                    return;
+                }
+
+                await File.WriteAllBytesAsync(targetPath, result.Bytes!);
+                StatusText.Text = $"已导出长图: {Path.GetFileName(targetPath)}（{offsets.Count} 屏拼接）";
+                LogInfo("Long image exported: " + Path.GetFileName(targetPath));
+            }
+            catch (Exception ex)
+            {
+                LogErr("ExportLongImage: " + ex.Message);
+                StatusText.Text = "导出长图失败: " + ex.Message;
+            }
+            finally
+            {
+                // 恢复用户原来的阅读位置 —— 导出不该把人家正在读的地方滚走
+                await ScrollToAsync(state, metrics.Value.ScrollY);
+                ShellIntegration.EndBusy(this);
+            }
+        }
+
+        /// <summary>读取页面整篇高度、最大可滚动距离与当前滚动位置（一次往返取回三个数）。</summary>
+        private async Task<(double Height, double MaxScroll, double ScrollY)?> ReadPageMetricsAsync(PanelState state)
+        {
+            try
+            {
+                if (state.WebView?.CoreWebView2 == null) return null;
+                var raw = await state.WebView.CoreWebView2.ExecuteScriptAsync(
+                    "(function(){var d=document.documentElement,b=document.body;" +
+                    "var h=Math.max(d.scrollHeight,b?b.scrollHeight:0);" +
+                    "return JSON.stringify({h:h,m:Math.max(0,h-window.innerHeight)," +
+                    "y:window.pageYOffset||d.scrollTop||0});})()");
+                using var doc = JsonDocument.Parse(UnwrapJsonString(raw));
+                var root = doc.RootElement;
+                return (root.GetProperty("h").GetDouble(),
+                        root.GetProperty("m").GetDouble(),
+                        root.GetProperty("y").GetDouble());
+            }
+            catch (Exception ex)
+            {
+                LogErr("ReadPageMetrics: " + ex.Message);
+                return null;
+            }
+        }
+
+        /// <summary>把页面滚到指定纵向位置（立即，不做平滑动画 —— 动画会让截屏截到中间帧）。</summary>
+        private async Task ScrollToAsync(PanelState state, double y)
+        {
+            try
+            {
+                if (state.WebView?.CoreWebView2 == null) return;
+                await state.WebView.CoreWebView2.ExecuteScriptAsync(
+                    "window.scrollTo(0," + y.ToString("0.###", CultureInfo.InvariantCulture) + ")");
+            }
+            catch (Exception ex) { LogErr("ScrollTo: " + ex.Message); }
+        }
     }
 }

@@ -154,6 +154,12 @@ namespace SeeMe
         /// <summary>把当前预览导出为 PNG 图片（转发到导出按钮的事件处理器）。</summary>
         public void ExportActiveToImage() => OnExportImage(this, new RoutedEventArgs());
 
+        /// <summary>
+        /// 把当前预览**整篇**导出为一张长图（滚动截屏 + 拼接）。
+        /// 命令面板入口；异常与进度提示都在实现里处理，故这里吞掉返回的 Task。
+        /// </summary>
+        public void ExportActiveToLongImage() => _ = ExportActiveToLongImageAsync();
+
         /// <summary>打开导出对话框（Markdown / Word 等）。</summary>
         public void ShowExportDialogForActive()
         {
